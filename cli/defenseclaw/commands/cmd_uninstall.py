@@ -96,6 +96,7 @@ class UninstallPlan:
     stop_gateway: bool = True
     revert_openclaw: bool = True
     remove_plugin: bool = True
+    remove_credential_mcp: bool = False
     remove_data_dir: bool = False
     remove_binaries: bool = False
     data_dir: str = ""
@@ -404,6 +405,7 @@ def _build_plan(
         stop_gateway=True,
         revert_openclaw=revert_openclaw and owns_openclaw,
         remove_plugin=remove_plugin and owns_openclaw,
+        remove_credential_mcp=True,
         remove_data_dir=wipe_data,
         remove_binaries=binaries,
         data_dir=data_dir,
@@ -593,6 +595,7 @@ def _render_plan(plan: UninstallPlan, *, dry_run: bool) -> None:
             f"({plan.openclaw_config_file})"
         )
         click.echo(f"  • {ux.bold('remove plugin:')}        {'yes' if plan.remove_plugin else 'no'}")
+    click.echo(f"  • {ux.bold('remove s-gw MCP:')}     {'yes' if plan.remove_credential_mcp else 'no'}")
     click.echo(f"  • {ux.bold('wipe ' + plan.data_dir + ':')} {'yes' if plan.remove_data_dir else 'no'}")
     if plan.preserve_data_entries:
         click.echo(f"  • {ux.bold('preserve runtime:')}      {', '.join(plan.preserve_data_entries)}")
@@ -631,6 +634,8 @@ def _execute_plan(plan: UninstallPlan) -> ExecutionResult:
         run_phase("gateway stop", lambda: _stop_gateway(plan))
     if plan.connectors:
         run_phase("connector teardown", lambda: _connector_teardown(plan))
+    if plan.remove_credential_mcp:
+        run_phase("s-gw MCP removal", lambda: _remove_credential_mcp(plan))
     if plan.remove_plugin and "openclaw" in plan.connectors:
         # Plugin removal is OpenClaw-specific. For other connectors the
         # gateway sentinel teardown above already removed their hook
@@ -664,6 +669,43 @@ def _execute_plan(plan: UninstallPlan) -> ExecutionResult:
     result = ExecutionResult(tuple(phases))
     _render_execution_result(result)
     return result
+
+
+def _remove_credential_mcp(plan: UninstallPlan) -> None:
+    """Remove exact managed s-gw entries before its module can be deleted."""
+    from defenseclaw.credential_protection import (
+        CredentialProtectionError,
+        mcp_removal_failed,
+        remove_managed_mcp_connectors,
+        rollback_mcp_removal,
+    )
+
+    try:
+        cfg = config_module.load(data_dir=plan.data_dir)
+    except Exception as exc:  # noqa: BLE001 - malformed config must block destructive cleanup.
+        raise click.ClickException("could not load configuration for s-gw MCP cleanup") from exc
+
+    try:
+        results = remove_managed_mcp_connectors(cfg, include_inactive=True)
+    except CredentialProtectionError as exc:
+        raise click.ClickException(f"could not identify managed s-gw MCP registrations: {exc}") from exc
+    if mcp_removal_failed(results):
+        raise click.ClickException("managed s-gw MCP registrations could not be removed transactionally")
+
+    credential = getattr(cfg, "credential_protection", None)
+    if credential is None or not bool(getattr(credential, "enabled", False)):
+        return
+    credential.enabled = False
+    try:
+        cfg.save()
+    except OSError as exc:
+        credential.enabled = True
+        try:
+            rolled_back = rollback_mcp_removal(cfg, results)
+        except CredentialProtectionError:
+            rolled_back = False
+        detail = "" if rolled_back else "; one or more MCP registrations could not be restored"
+        raise click.ClickException(f"could not disable credential protection before uninstall{detail}") from exc
 
 
 def _render_execution_result(result: ExecutionResult) -> None:

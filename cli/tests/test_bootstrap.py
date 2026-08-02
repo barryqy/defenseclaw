@@ -61,6 +61,12 @@ class BootstrapEnvTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
+        default_broker = patch(
+            "defenseclaw.credential_protection.credential_protection_default_enabled",
+            return_value=False,
+        )
+        default_broker.start()
+        self.addCleanup(default_broker.stop)
         self._prev_home = os.environ.get("DEFENSECLAW_HOME")
         os.environ["DEFENSECLAW_HOME"] = self._tmp.name
         self.addCleanup(self._restore_home)
@@ -305,6 +311,21 @@ class FreshMigrationCursorTests(unittest.TestCase):
         self.assertEqual(state.applied_at["0.8.5"], migration_state.BOOTSTRAP_SENTINEL)
         self.assertTrue(all(state.applied_at[version] == migration_state.BOOTSTRAP_SENTINEL for version in expected))
 
+    def test_fresh_first_run_skips_broker_without_staged_release_module(self):
+        import yaml
+
+        data_dir = os.path.join(self._tmp.name, "source-default")
+        with patch("defenseclaw.bootstrap._setup_credential_protection_structured") as setup_broker:
+            report = self._run_first_run(data_dir)
+
+        setup_broker.assert_not_called()
+        with open(os.path.join(data_dir, "config.yaml"), encoding="utf-8") as stream:
+            raw = yaml.safe_load(stream)
+        self.assertNotIn("credential_protection", raw)
+        credential_step = next(step for step in report.setup if step.name == "Credential broker")
+        self.assertEqual(credential_step.status, "skip")
+        self.assertIn("release artifacts are not installed", credential_step.detail)
+
     def test_no_connector_first_run_creates_canonical_config_and_cursor_without_connector_setup(self):
         from defenseclaw import migration_state
         from defenseclaw.bootstrap import FirstRunOptions, run_first_run
@@ -328,9 +349,7 @@ class FreshMigrationCursorTests(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(data_dir, "config.yaml")))
         self.assertIsNotNone(migration_state.load(data_dir))
         connector_setup.assert_not_called()
-        self.assertTrue(
-            any(step.name == "Guardrail" and step.status == "skip" for step in report.setup)
-        )
+        self.assertTrue(any(step.name == "Guardrail" and step.status == "skip" for step in report.setup))
 
     def test_no_connector_first_run_preserves_existing_connector_selection(self):
         from defenseclaw.bootstrap import FirstRunOptions, run_first_run
@@ -388,6 +407,39 @@ class FreshMigrationCursorTests(unittest.TestCase):
         self.assertEqual(report.status, "needs_attention")
         with open(config_path, "rb") as stream:
             self.assertEqual(stream.read(), original)
+
+    def test_connector_first_run_preserves_unloadable_existing_config(self):
+        from defenseclaw.bootstrap import FirstRunOptions, run_first_run
+
+        data_dir = os.path.join(self._tmp.name, "connector-unloadable")
+        config_path = os.path.join(data_dir, "config.yaml")
+        os.makedirs(data_dir)
+        original = b"config_version: 8\noperator_extension: preserve-me\n"
+        with open(config_path, "wb") as stream:
+            stream.write(original)
+
+        with (
+            patch.dict(os.environ, {"DEFENSECLAW_HOME": data_dir}),
+            patch("defenseclaw.config.load", side_effect=OSError("injected load failure")),
+            patch("defenseclaw.bootstrap._quiet_guardrail_setup") as connector_setup,
+            patch("defenseclaw.bootstrap._setup_credential_protection_structured") as credential_setup,
+        ):
+            report = run_first_run(
+                FirstRunOptions(
+                    connector="codex",
+                    profile="observe",
+                    skip_install=True,
+                    start_gateway=False,
+                    verify=False,
+                    credential_protection=True,
+                )
+            )
+
+        self.assertEqual(report.status, "needs_attention")
+        self.assertIn("could not be loaded", report.setup[0].detail)
+        self.assertEqual(Path(config_path).read_bytes(), original)
+        connector_setup.assert_not_called()
+        credential_setup.assert_not_called()
 
     def test_rerun_preserves_bootstrapped_cursor_byte_for_byte(self):
         from defenseclaw import migration_state
@@ -1219,6 +1271,24 @@ class StartGatewayStructuredDriftTests(unittest.TestCase):
         self.assertEqual(
             recorder, [], "no subprocess invocation expected when the live connector matches cfg.active_connector()"
         )
+
+    def test_credential_service_restarts_running_same_connector(self):
+        from defenseclaw.bootstrap import _start_gateway_structured
+
+        self.cfg.guardrail.connector = "openclaw"
+        self._write_pid_file()
+        self._write_active_connector("openclaw")
+
+        recorder: list = []
+        with self._patch_subprocess(recorder):
+            result = _start_gateway_structured(
+                self.cfg,
+                restart_if_running=True,
+            )
+
+        self.assertEqual(result.status, "pass")
+        self.assertIn("credential-protection service", result.detail)
+        self.assertEqual(recorder, [("/usr/bin/defenseclaw-gateway", "restart")])
 
     def test_drift_triggers_restart_with_descriptive_detail(self):
         from defenseclaw.bootstrap import _start_gateway_structured

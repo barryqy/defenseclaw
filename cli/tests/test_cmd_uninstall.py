@@ -27,6 +27,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import click
@@ -51,6 +52,7 @@ def capture_click_output():
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from defenseclaw.commands import cmd_uninstall  # noqa: E402  (sys.path tweak above)
+from defenseclaw.credential_protection import CredentialProtectionError  # noqa: E402
 
 
 class BuildPlanTests(unittest.TestCase):
@@ -127,6 +129,7 @@ class UninstallCommandTests(unittest.TestCase):
             )
             self.assertEqual(result.exit_code, 0, msg=result.output)
             self.assertIn("dry-run", result.output)
+            self.assertIn("remove s-gw MCP", result.output)
             exec_mock.assert_not_called()
 
     def test_confirmation_declined_aborts(self):
@@ -187,6 +190,7 @@ class ResetCommandTests(unittest.TestCase):
         with (
             patch("defenseclaw.commands.cmd_uninstall._stop_gateway"),
             patch("defenseclaw.commands.cmd_uninstall._connector_teardown"),
+            patch("defenseclaw.commands.cmd_uninstall._remove_credential_mcp"),
             patch("defenseclaw.commands.cmd_uninstall._remove_data_dir", side_effect=OSError("locked native module")),
         ):
             result = runner.invoke(cmd_uninstall.reset_cmd, ["--yes"])
@@ -223,7 +227,7 @@ class WindowsOwnedCleanupTests(unittest.TestCase):
 
     def test_binary_only_removes_exact_targets_and_preserves_unrelated_files(self):
         with tempfile.TemporaryDirectory() as tmp:
-            profile = Path(tmp) / "kévin profile"
+            profile = Path(tmp).resolve() / "kévin profile"
             root = profile / "bin"
             root.mkdir(parents=True)
             targets = tuple(
@@ -261,7 +265,7 @@ class WindowsOwnedCleanupTests(unittest.TestCase):
 
     def test_binary_failure_propagates(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "bin"
+            root = Path(tmp).resolve() / "bin"
             root.mkdir()
             target = root / "defenseclaw.cmd"
             managed_venv = Path(tmp) / ".defenseclaw" / ".venv"
@@ -1115,6 +1119,150 @@ class RemoveDataDirTests(unittest.TestCase):
                     cmd_uninstall._remove_data_dir(str(data_dir))
 
             self.assertTrue(marker.is_file())
+
+
+class CredentialMCPUninstallTests(unittest.TestCase):
+    def test_cleanup_sweeps_known_connectors_when_config_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / ".defenseclaw"
+            data_dir.mkdir()
+            cfg = SimpleNamespace(
+                credential_protection=SimpleNamespace(enabled=False),
+            )
+            plan = cmd_uninstall.UninstallPlan(data_dir=str(data_dir))
+            with (
+                patch.object(cmd_uninstall.config_module, "load", return_value=cfg) as load,
+                patch(
+                    "defenseclaw.credential_protection.remove_managed_mcp_connectors",
+                    return_value=[],
+                ) as remove,
+            ):
+                cmd_uninstall._remove_credential_mcp(plan)
+
+            load.assert_called_once_with(data_dir=str(data_dir))
+            remove.assert_called_once_with(cfg, include_inactive=True)
+
+    def test_cleanup_sweeps_inactive_connectors_and_disables_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / ".defenseclaw"
+            data_dir.mkdir()
+            (data_dir / "config.yaml").write_text("config_version: 8\n", encoding="utf-8")
+            saved: list[bool] = []
+            cfg = SimpleNamespace(
+                credential_protection=SimpleNamespace(enabled=True),
+                save=lambda: saved.append(True),
+            )
+            results = [
+                {
+                    "connector": "codex",
+                    "mcp_registration": "removed",
+                    "changed": True,
+                    "proxy_prompt_tokenization": "not_in_direct_upstream_path",
+                }
+            ]
+            plan = cmd_uninstall.UninstallPlan(data_dir=str(data_dir))
+            with (
+                patch.object(cmd_uninstall.config_module, "load", return_value=cfg),
+                patch(
+                    "defenseclaw.credential_protection.remove_managed_mcp_connectors",
+                    return_value=results,
+                ) as remove,
+            ):
+                cmd_uninstall._remove_credential_mcp(plan)
+
+            remove.assert_called_once_with(cfg, include_inactive=True)
+            self.assertFalse(cfg.credential_protection.enabled)
+            self.assertEqual(saved, [True])
+
+    def test_cleanup_failure_stops_before_data_removal(self):
+        plan = cmd_uninstall.UninstallPlan(
+            data_dir="/tmp/dc",
+            connectors=("codex",),
+            remove_credential_mcp=True,
+            remove_data_dir=True,
+        )
+        order: list[str] = []
+        with (
+            patch.object(cmd_uninstall, "_validate_plan"),
+            patch.object(cmd_uninstall, "_stop_gateway"),
+            patch.object(cmd_uninstall, "_connector_teardown", side_effect=lambda _: order.append("teardown")),
+            patch.object(
+                cmd_uninstall,
+                "_remove_credential_mcp",
+                side_effect=click.ClickException("injected MCP cleanup failure"),
+            ),
+            patch.object(cmd_uninstall, "_remove_data_dir", side_effect=lambda *_args, **_kwargs: order.append("wipe")),
+        ):
+            with self.assertRaises(click.ClickException):
+                cmd_uninstall._execute_plan(plan)
+
+        self.assertEqual(order, ["teardown"])
+
+    def test_unproven_sgw_cleanup_blocks_data_removal_for_repair(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / ".defenseclaw"
+            data_dir.mkdir()
+            marker = data_dir / "module-repair-evidence"
+            marker.write_text("preserve", encoding="utf-8")
+            cfg = SimpleNamespace(
+                credential_protection=SimpleNamespace(enabled=True),
+            )
+            plan = cmd_uninstall.UninstallPlan(
+                data_dir=str(data_dir),
+                remove_credential_mcp=True,
+                remove_data_dir=True,
+            )
+            with (
+                patch.object(cmd_uninstall, "_validate_plan"),
+                patch.object(cmd_uninstall, "_stop_gateway"),
+                patch.object(cmd_uninstall.config_module, "load", return_value=cfg),
+                patch(
+                    "defenseclaw.credential_protection.remove_managed_mcp_connectors",
+                    side_effect=CredentialProtectionError("mcp_reconciliation_failed"),
+                ),
+                patch.object(cmd_uninstall, "_remove_data_dir") as remove_data,
+            ):
+                with self.assertRaises(click.ClickException) as caught:
+                    cmd_uninstall._execute_plan(plan)
+
+            self.assertIn("could not identify managed s-gw MCP registrations", str(caught.exception))
+            remove_data.assert_not_called()
+            self.assertTrue(marker.is_file())
+
+    def test_cleanup_rolls_back_when_config_save_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / ".defenseclaw"
+            data_dir.mkdir()
+            (data_dir / "config.yaml").write_text("config_version: 8\n", encoding="utf-8")
+            cfg = SimpleNamespace(
+                credential_protection=SimpleNamespace(enabled=True),
+                save=lambda: (_ for _ in ()).throw(OSError("injected save failure")),
+            )
+            results = [
+                {
+                    "connector": "codex",
+                    "mcp_registration": "removed",
+                    "changed": True,
+                    "proxy_prompt_tokenization": "not_in_direct_upstream_path",
+                }
+            ]
+            plan = cmd_uninstall.UninstallPlan(data_dir=str(data_dir))
+            with (
+                patch.object(cmd_uninstall.config_module, "load", return_value=cfg),
+                patch(
+                    "defenseclaw.credential_protection.remove_managed_mcp_connectors",
+                    return_value=results,
+                ),
+                patch(
+                    "defenseclaw.credential_protection.rollback_mcp_removal",
+                    return_value=True,
+                ) as rollback,
+            ):
+                with self.assertRaises(click.ClickException):
+                    cmd_uninstall._remove_credential_mcp(plan)
+
+            self.assertTrue(cfg.credential_protection.enabled)
+            rollback.assert_called_once_with(cfg, results)
 
 
 class ExecutePlanConnectorTests(unittest.TestCase):

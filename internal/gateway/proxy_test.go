@@ -2075,12 +2075,19 @@ func TestScrubURLSecrets(t *testing.T) {
 		want string
 	}{
 		{"no query", "https://api.openai.com/v1/chat/completions", "https://api.openai.com/v1/chat/completions"},
-		{"gemini key", "https://generativelanguage.googleapis.com/models/gemini:generate?key=AIza1234secret", "https://generativelanguage.googleapis.com/models/gemini:generate?key=REDACTED"},
-		{"multiple params", "https://example.com/api?key=secret&alt=sse", "https://example.com/api?alt=sse&key=REDACTED"},
-		{"api-key param", "https://example.com?api-key=secret", "https://example.com?api-key=REDACTED"},
-		{"token param", "https://example.com?token=abc123", "https://example.com?token=REDACTED"},
-		{"no sensitive params", "https://api.openai.com?model=gpt-4", "https://api.openai.com?model=gpt-4"},
-		{"invalid url", "://bad", "://bad"},
+		{"gemini key", "https://generativelanguage.googleapis.com/models/gemini:generate?key=AIza1234secret", "https://generativelanguage.googleapis.com/models/gemini:generate"},
+		{"multiple params", "https://example.com/api?key=secret&alt=sse", "https://example.com/api"},
+		{"api-key param", "https://example.com?api-key=secret", "https://example.com"},
+		{"token param", "https://example.com?token=abc123", "https://example.com"},
+		{"userinfo", "https://user:password@example.com/path", "https://example.com/path"},
+		{"case-insensitive token", "https://example.com?TOKEN=abc123", "https://example.com"},
+		{"arbitrary query", "https://api.openai.com/v1?model=gpt-4", "https://api.openai.com/v1"},
+		{"fragment", "https://example.com/path#access_token=fragment-secret", "https://example.com/path"},
+		{"trailing query marker", "https://example.com/path?", "https://example.com/path"},
+		{"userinfo query fragment", "https://user:password@example.com:8443/a%2Fb?request_id=query-secret#fragment-secret", "https://example.com:8443/a%2Fb"},
+		{"empty", "", ""},
+		{"invalid url", "://bad", "[invalid URL]"},
+		{"relative credential-like value", "token=topsecret", "[invalid URL]"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

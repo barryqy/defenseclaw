@@ -235,15 +235,17 @@ def test_mcp_parse_scoped_group_and_empty_group() -> None:
 
 
 def test_mcp_actions_name_connector_specific_unset_targets(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
     hermes_config = tmp_path / "hermes-home" / "config.yaml"
     claude_config = tmp_path / "claude-home" / "settings.json"
     codex_config = tmp_path / "codex-home" / "config.toml"
     monkeypatch.setenv("HERMES_HOME", str(hermes_config.parent))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_config.parent))
     monkeypatch.setenv("CODEX_HOME", str(codex_config.parent))
+    monkeypatch.setenv("HOME", str(home))
     cases = {
         "openclaw": "OpenClaw config",
-        "claudecode": str(claude_config),
+        "claudecode": str(home / ".claude.json"),
         "codex": str(codex_config),
         "zeptoclaw": "~/.zeptoclaw/config.json",
         "hermes": str(hermes_config),

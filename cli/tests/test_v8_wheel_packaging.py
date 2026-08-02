@@ -54,14 +54,23 @@ def build_hook_module() -> ModuleType:
     setuptools_module = ModuleType("setuptools")
     setuptools_module.setup = lambda **_kwargs: None  # type: ignore[attr-defined]
     command_module = ModuleType("setuptools.command")
+    bdist_wheel_module = ModuleType("setuptools.command.bdist_wheel")
     build_py_module = ModuleType("setuptools.command.build_py")
+    dist_info_module = ModuleType("setuptools.command.dist_info")
+    editable_wheel_module = ModuleType("setuptools.command.editable_wheel")
+    bdist_wheel_module.bdist_wheel = object  # type: ignore[attr-defined]
     build_py_module.build_py = object  # type: ignore[attr-defined]
+    dist_info_module.dist_info = object  # type: ignore[attr-defined]
+    editable_wheel_module.editable_wheel = object  # type: ignore[attr-defined]
     with mock.patch.dict(
         sys.modules,
         {
             "setuptools": setuptools_module,
             "setuptools.command": command_module,
+            "setuptools.command.bdist_wheel": bdist_wheel_module,
             "setuptools.command.build_py": build_py_module,
+            "setuptools.command.dist_info": dist_info_module,
+            "setuptools.command.editable_wheel": editable_wheel_module,
         },
     ):
         spec.loader.exec_module(module)
@@ -84,11 +93,18 @@ def _copy_pristine_source(destination: Path) -> None:
     required_files = {
         Path("pyproject.toml"),
         Path("setup.py"),
+        Path("defenseclaw_build_backend.py"),
         Path("MANIFEST.in"),
         Path("README.md"),
         Path("LICENSE"),
         Path("NOTICE"),
         Path("internal/envvars/registry.json"),
+        Path("release/s-gw-module.json"),
+        Path("release/s-gw-runners.json"),
+        Path("scripts/build_sgw_module.py"),
+        Path("scripts/sgw_module.py"),
+        Path("scripts/stage_sgw_modules.py"),
+        Path("scripts/sync_sgw_vendor.py"),
         Path("scripts/telemetry_runtime_assets.py"),
         *[Path(path) for path in EXPECTED_SDIST_CONFIG_INPUTS],
         *[Path(path) for path in EXPECTED_SDIST_TELEMETRY_INPUTS],
@@ -104,6 +120,7 @@ def _copy_pristine_source(destination: Path) -> None:
         Path("cli/defenseclaw"),
         Path("bundles/local_observability_stack"),
         Path("bundles/splunk_local_bridge"),
+        Path("third_party/s-gw"),
     ):
         shutil.copytree(
             ROOT / relative,
@@ -292,8 +309,15 @@ def test_sdist_contains_exact_build_inputs_and_builds_complete_wheel(
         == EXPECTED_SDIST_TELEMETRY_INPUTS
     )
     for required in (
+        "defenseclaw_build_backend.py",
         "setup.py",
         "internal/envvars/registry.json",
+        "release/s-gw-module.json",
+        "release/s-gw-runners.json",
+        "scripts/build_sgw_module.py",
+        "scripts/sgw_module.py",
+        "scripts/stage_sgw_modules.py",
+        "scripts/sync_sgw_vendor.py",
         "scripts/telemetry_runtime_assets.py",
     ):
         assert relative_names.count(required) == 1

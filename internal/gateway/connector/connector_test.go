@@ -1345,10 +1345,14 @@ func TestClaudeCode_Setup_HonorsClaudeConfigDir(t *testing.T) {
 	}
 
 	targets := c.ComponentTargets(filepath.Join(dir, "workspace"))
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("user home: %v", err)
+	}
 	for component, expected := range map[string]string{
 		"skill":   filepath.Join(claudeConfigDir, "skills"),
 		"plugin":  filepath.Join(claudeConfigDir, "plugins"),
-		"mcp":     settingsPath,
+		"mcp":     filepath.Join(home, ".claude.json"),
 		"agent":   filepath.Join(claudeConfigDir, "agents"),
 		"command": filepath.Join(claudeConfigDir, "commands"),
 		"config":  settingsPath,
@@ -1366,6 +1370,22 @@ func TestClaudeCode_Setup_HonorsClaudeConfigDir(t *testing.T) {
 	}
 	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
 		t.Fatalf("CLAUDE_CONFIG_DIR settings remained after teardown: %v", err)
+	}
+}
+
+func TestClaudeCode_ComponentTargetsDoesNotUseWorkingDirectoryAsHome(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(dir, "claude-config"))
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	t.Setenv("HOMEDRIVE", "")
+	t.Setenv("HOMEPATH", "")
+
+	workspace := filepath.Join(dir, "workspace")
+	targets := NewClaudeCodeConnector().ComponentTargets(workspace)
+	want := filepath.Join(workspace, ".mcp.json")
+	if len(targets["mcp"]) != 1 || targets["mcp"][0] != want {
+		t.Fatalf("ComponentTargets(mcp) = %v, want [%q]", targets["mcp"], want)
 	}
 }
 

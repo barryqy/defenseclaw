@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import copy
 import csv
 import hashlib
 import io
@@ -47,9 +48,17 @@ from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
+try:
+    from scripts import stage_sgw_modules
+except ModuleNotFoundError:
+    import stage_sgw_modules  # type: ignore[no-redef]
+
 ZIP_EPOCH = 315532800  # 1980-01-01, the earliest timestamp ZIP can encode.
 BUFFER_SIZE = 1024 * 1024
 HOOK_LAUNCHER_PAYLOAD_NAME = "defenseclaw-hook-launcher.exe"
+SGW_CORE_LICENSE = stage_sgw_modules.SGW_CORE_LICENSE
+SGW_MIXED_LICENSE = stage_sgw_modules.SGW_MIXED_LICENSE
+SGW_SBOM_START_VERSION = (0, 8, 11)
 
 
 class ArtifactError(RuntimeError):
@@ -375,6 +384,126 @@ class SpdxDocument:
         self.package_files: dict[str, set[str]] = defaultdict(set)
         self.relationships: set[tuple[str, str, str]] = set()
         self.described: list[str] = []
+        self.extracted_licenses: dict[str, dict] = {}
+        self.external_documents: list[dict] = []
+
+    def add_external_document(self, source: dict, sha256: str) -> None:
+        namespace = source.get("documentNamespace")
+        if not isinstance(namespace, str) or not namespace or re.fullmatch(r"[0-9a-f]{64}", sha256) is None:
+            raise ArtifactError("s-gw SPDX external document identity is invalid")
+        self.external_documents.append(
+            {
+                "externalDocumentId": "DocumentRef-s-gw-runtime",
+                "spdxDocument": namespace,
+                "checksum": {"algorithm": "SHA256", "checksumValue": sha256},
+            }
+        )
+
+    def add_extracted_license(self, record: dict) -> None:
+        license_id = record.get("licenseId")
+        extracted_text = record.get("extractedText")
+        if (
+            not isinstance(license_id, str)
+            or not license_id.startswith("LicenseRef-")
+            or not isinstance(extracted_text, str)
+            or not extracted_text
+        ):
+            raise ArtifactError("Imported SPDX license information is malformed")
+        previous = self.extracted_licenses.get(license_id)
+        if previous is not None and previous != record:
+            raise ArtifactError(f"Conflicting SPDX license information: {license_id}")
+        self.extracted_licenses[license_id] = copy.deepcopy(record)
+
+    def import_sgw_inventory(self, source: dict, wheel_package_id: str) -> tuple[int, int]:
+        packages = source.get("packages")
+        files = source.get("files")
+        relationships = source.get("relationships")
+        described = source.get("documentDescribes")
+        if (
+            not isinstance(packages, list)
+            or not isinstance(files, list)
+            or not isinstance(relationships, list)
+            or not isinstance(described, list)
+            or len(described) != 1
+        ):
+            raise ArtifactError("s-gw SPDX inventory is incomplete")
+        for record in source.get("hasExtractedLicensingInfos") or []:
+            if not isinstance(record, dict):
+                raise ArtifactError("s-gw SPDX license information is malformed")
+            self.add_extracted_license(record)
+
+        source_ids = {
+            record.get("SPDXID")
+            for record in [*packages, *files]
+            if isinstance(record, dict) and isinstance(record.get("SPDXID"), str)
+        }
+        if len(source_ids) != len(packages) + len(files):
+            raise ArtifactError("s-gw SPDX inventory contains duplicate or invalid identifiers")
+        described_id = described[0]
+        if described_id not in source_ids:
+            raise ArtifactError("s-gw SPDX document describes an absent wheel package")
+        id_map = {described_id: wheel_package_id, "SPDXRef-DOCUMENT": "SPDXRef-DOCUMENT"}
+
+        imported_packages = 0
+        for record in packages:
+            if record.get("SPDXID") == described_id:
+                continue
+            copied = copy.deepcopy(record)
+            old_id = copied["SPDXID"]
+            new_id = _spdx_id("ImportedSgw", old_id)
+            copied["SPDXID"] = new_id
+            if new_id in self.packages:
+                raise ArtifactError(f"Imported s-gw package identifier conflicts: {old_id}")
+            self.packages[new_id] = copied
+            self.package_files.setdefault(new_id, set())
+            id_map[old_id] = new_id
+            imported_packages += 1
+
+        imported_files = 0
+        for record in files:
+            copied = copy.deepcopy(record)
+            old_id = copied["SPDXID"]
+            new_id = _spdx_id("ImportedSgwFile", old_id)
+            copied["SPDXID"] = new_id
+            logical_name = copied.get("fileName")
+            checksums = copied.get("checksums")
+            if not isinstance(logical_name, str) or not logical_name.startswith("./sgw/"):
+                raise ArtifactError("Imported s-gw SPDX file identity is unsafe")
+            if new_id in self.files or not isinstance(checksums, list):
+                raise ArtifactError(f"Imported s-gw file identifier conflicts: {old_id}")
+            sha1 = next(
+                (
+                    item.get("checksumValue")
+                    for item in checksums
+                    if isinstance(item, dict) and item.get("algorithm") == "SHA1"
+                ),
+                None,
+            )
+            if not isinstance(sha1, str) or re.fullmatch(r"[0-9a-f]{40}", sha1) is None:
+                raise ArtifactError(f"Imported s-gw file lacks its SPDX SHA-1: {logical_name}")
+            self.files[new_id] = copied
+            self.file_sha1[new_id] = sha1
+            id_map[old_id] = new_id
+            imported_files += 1
+
+        for row in relationships:
+            if not isinstance(row, dict) or set(row) != {
+                "spdxElementId",
+                "relationshipType",
+                "relatedSpdxElement",
+            }:
+                raise ArtifactError("Imported s-gw SPDX relationship is malformed")
+            source_id = id_map.get(row["spdxElementId"])
+            target_id = id_map.get(row["relatedSpdxElement"])
+            if source_id is None or target_id is None:
+                raise ArtifactError("Imported s-gw SPDX relationship names an unknown element")
+            relationship = row["relationshipType"]
+            if source_id == "SPDXRef-DOCUMENT" and relationship == "DESCRIBES":
+                continue
+            self.relate(source_id, relationship, target_id)
+            if relationship == "CONTAINS" and source_id in self.packages and target_id in self.files:
+                self.package_files[source_id].add(target_id)
+        return imported_packages, imported_files
 
     def add_file(self, logical_name: str, sha256: str, sha1: str) -> str:
         if not logical_name.startswith("./"):
@@ -491,6 +620,12 @@ class SpdxDocument:
                 for source, relationship, target in sorted(self.relationships)
             ],
         }
+        if self.extracted_licenses:
+            document["hasExtractedLicensingInfos"] = [
+                self.extracted_licenses[key] for key in sorted(self.extracted_licenses)
+            ]
+        if self.external_documents:
+            document["externalDocumentRefs"] = copy.deepcopy(self.external_documents)
         self.validate(document)
         return document
 
@@ -514,6 +649,18 @@ class SpdxDocument:
         described = document.get("documentDescribes") or []
         if len(described) != 1 or described[0] not in identifiers:
             raise ArtifactError("SPDX document must describe exactly one setup package")
+        declared_refs = {
+            record.get("licenseId")
+            for record in document.get("hasExtractedLicensingInfos") or []
+            if isinstance(record, dict)
+        }
+        used_refs: set[str] = set()
+        for package in packages:
+            expression = package.get("licenseDeclared")
+            if isinstance(expression, str):
+                used_refs.update(re.findall(r"\bLicenseRef-[A-Za-z0-9.-]+\b", expression))
+        if used_refs - declared_refs:
+            raise ArtifactError("SPDX document uses an undeclared extracted license")
 
 
 def _attach_authenticode_evidence(document: SpdxDocument, inventory_path: Path, payload_manifest: dict) -> int:
@@ -554,9 +701,7 @@ def _attach_authenticode_evidence(document: SpdxDocument, inventory_path: Path, 
             raise ArtifactError(f"Invalid Authenticode installed path {installed_path!r}")
         folded_installed_path = installed_path.casefold()
         if previous := installed_paths.get(folded_installed_path):
-            raise ArtifactError(
-                f"Case-colliding Authenticode installed paths: {previous!r}, {installed_path!r}"
-            )
+            raise ArtifactError(f"Case-colliding Authenticode installed paths: {previous!r}, {installed_path!r}")
         installed_paths[folded_installed_path] = installed_path
         if not isinstance(evidence, dict) or evidence.get("schema_version") != 1:
             raise ArtifactError(f"Invalid Authenticode evidence for {installed_path!r}")
@@ -681,9 +826,7 @@ def _payload_contract(
             continue
         folded = candidate.name.casefold()
         if previous := actual_names.get(folded):
-            raise ArtifactError(
-                f"Payload root has case-colliding file names: {previous!r}, {candidate.name!r}"
-            )
+            raise ArtifactError(f"Payload root has case-colliding file names: {previous!r}, {candidate.name!r}")
         actual_names[folded] = candidate.name
         actual[candidate.name] = candidate
     if set(actual) != set(files):
@@ -904,6 +1047,37 @@ def _add_go_inventory(
     return len(module_ids)
 
 
+def _validated_sgw_sbom(path: Path, wheel: Path, version: str) -> tuple[dict, str]:
+    try:
+        payload = stage_sgw_modules.regular_file(
+            path,
+            label="s-gw SPDX SBOM",
+            max_bytes=stage_sgw_modules.MAX_SGW_SBOM_BYTES,
+        )
+        with tempfile.TemporaryDirectory(prefix="defenseclaw-windows-sgw-sbom-") as temp:
+            snapshot = Path(temp) / "s-gw.spdx.json"
+            snapshot.write_bytes(payload)
+            stage_sgw_modules.validate_sgw_sbom(
+                wheel,
+                snapshot,
+                version=version,
+                authenticate=False,
+            )
+        document = json.loads(payload)
+    except (OSError, json.JSONDecodeError, stage_sgw_modules.DeliveryError) as exc:
+        raise ArtifactError(f"s-gw SPDX SBOM is invalid: {exc}") from exc
+    if not isinstance(document, dict):
+        raise ArtifactError("s-gw SPDX SBOM must contain one JSON object")
+    return document, hashlib.sha256(payload).hexdigest()
+
+
+def _requires_sgw_sbom(version: str) -> bool:
+    match = re.fullmatch(r"([0-9]+)\.([0-9]+)\.([0-9]+)(?:-[A-Za-z0-9_.-]+)?", version)
+    if match is None:
+        raise ArtifactError(f"Invalid Windows installer SBOM version: {version!r}")
+    return tuple(int(value) for value in match.groups()) >= SGW_SBOM_START_VERSION
+
+
 def build_sbom(args: argparse.Namespace) -> dict:
     setup = args.setup.resolve(strict=True)
     payload_root = args.payload_root.resolve(strict=True)
@@ -927,6 +1101,17 @@ def build_sbom(args: argparse.Namespace) -> dict:
             raise ArtifactError(f"Required payload component is absent ({prop}): {name}")
     if "requirements-release.txt" not in payload_files:
         raise ArtifactError("Required locked Python requirements are absent")
+    sgw_required = _requires_sgw_sbom(args.version)
+    sgw_sbom: dict | None = None
+    sgw_sbom_sha256: str | None = None
+    if sgw_required:
+        if args.sgw_sbom is None:
+            raise ArtifactError("The s-gw SPDX SBOM is required for this Windows installer release")
+        sgw_sbom, sgw_sbom_sha256 = _validated_sgw_sbom(
+            args.sgw_sbom,
+            payload_files[required["wheel"]],
+            args.version,
+        )
 
     setup_sha256, setup_sha1 = _file_digests(setup)
     embedded_sha256, embedded_sha1 = _file_digests(embedded_payload)
@@ -940,9 +1125,9 @@ def build_sbom(args: argparse.Namespace) -> dict:
         "https://github.com/cisco-ai-defense/defenseclaw/"
         f"spdx/windows/{urllib.parse.quote(args.version, safe='-._~')}/{setup_sha256}"
     )
-    document = SpdxDocument(
-        f"DefenseClawSetup-x64.exe-{args.version}", namespace, created, args.source_commit
-    )
+    document = SpdxDocument(f"DefenseClawSetup-x64.exe-{args.version}", namespace, created, args.source_commit)
+    if sgw_sbom is not None and sgw_sbom_sha256 is not None:
+        document.add_external_document(sgw_sbom, sgw_sbom_sha256)
 
     setup_id = document.add_package(
         "windows-setup",
@@ -951,7 +1136,7 @@ def build_sbom(args: argparse.Namespace) -> dict:
         "INSTALL",
         checksum=setup_sha256,
         package_file_name=setup.name,
-        license_declared="Apache-2.0",
+        license_declared=SGW_MIXED_LICENSE if sgw_required else "Apache-2.0",
         purl=f"pkg:github/cisco-ai-defense/defenseclaw@{urllib.parse.quote(args.version, safe='-._~')}",
     )
     setup_file_id = document.add_file(f"./{setup.name}", setup_sha256, setup_sha1)
@@ -966,7 +1151,7 @@ def build_sbom(args: argparse.Namespace) -> dict:
         "ARCHIVE",
         checksum=embedded_sha256,
         package_file_name=embedded_payload.name,
-        license_declared="Apache-2.0",
+        license_declared=SGW_MIXED_LICENSE if sgw_required else "Apache-2.0",
     )
     embedded_file_id = document.add_file("./embedded/installer-payload.zip", embedded_sha256, embedded_sha1)
     document.contains_file(embedded_id, embedded_file_id)
@@ -1004,6 +1189,9 @@ def build_sbom(args: argparse.Namespace) -> dict:
     }
     component_licenses = {name: "Apache-2.0" for name in component_paths}
     component_licenses[required["python_embed"]] = "PSF-2.0"
+    if sgw_required:
+        component_licenses[required["wheel"]] = SGW_MIXED_LICENSE
+        component_licenses[required["site_packages"]] = SGW_MIXED_LICENSE
     component_packages: dict[str, str] = {}
     for name, path in sorted(component_paths.items()):
         sha256, sha1 = _file_digests(path)
@@ -1024,6 +1212,14 @@ def build_sbom(args: argparse.Namespace) -> dict:
         document.contains_file(package_id, file_id)
         document.relate(embedded_id, "CONTAINS", package_id)
         component_packages[name] = package_id
+
+    imported_sgw_packages = 0
+    imported_sgw_files = 0
+    if sgw_sbom is not None:
+        imported_sgw_packages, imported_sgw_files = document.import_sgw_inventory(
+            sgw_sbom,
+            component_packages[required["wheel"]],
+        )
 
     go_component_packages = {
         "setup": setup_id,
@@ -1100,6 +1296,10 @@ def build_sbom(args: argparse.Namespace) -> dict:
         component_packages[site_name],
         site_entries,
     )
+    if sgw_required:
+        defenseclaw_package = document.packages.get(distributions.get("defenseclaw", ""))
+        if defenseclaw_package is None or defenseclaw_package.get("licenseDeclared") != SGW_MIXED_LICENSE:
+            raise ArtifactError("Embedded DefenseClaw distribution metadata does not declare the required s-gw license")
     go_modules = _add_go_inventory(document, args.go_inventory.resolve(strict=True), go_component_packages)
 
     # Fail closed if any exact payload digest is absent from the generated
@@ -1134,6 +1334,9 @@ def build_sbom(args: argparse.Namespace) -> dict:
         "go_modules": go_modules,
         "payload_digests": len(payload_digests),
         "authenticode_files": authenticode_files,
+        "sgw_packages": imported_sgw_packages,
+        "sgw_files": imported_sgw_files,
+        "sgw_sbom_sha256": sgw_sbom_sha256,
     }
 
 
@@ -1169,6 +1372,7 @@ def _parser() -> argparse.ArgumentParser:
     sbom_parser.add_argument("--cosign-version", required=True)
     sbom_parser.add_argument("--go-inventory", type=Path, required=True)
     sbom_parser.add_argument("--authenticode-inventory", type=Path, required=True)
+    sbom_parser.add_argument("--sgw-sbom", type=Path)
     return parser
 
 

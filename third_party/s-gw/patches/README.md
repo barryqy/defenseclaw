@@ -1,0 +1,29 @@
+# DefenseClaw patch queue
+
+If DefenseClaw needs an s-gw change before its standalone release, store a
+numbered `git format-patch` file here and list it in `series`. The module build
+must apply the queue in that order and fail if any patch no longer applies.
+Every patch must also have a matching standalone s-gw pull request or commit.
+
+Current queue:
+
+1. `0001-defenseclaw-native-runtime-boundary.patch` advances the package to
+   0.2.0, adds the packaged Linux Secret Service helper contract, and hardens
+   Windows helper command admission. It disables the bundled Node console,
+   service, and app surfaces and intentionally contains no TypeScript proxy
+   tokenizer, quarantine, restricted MCP fallback, or enrollment approval
+   mutation. The DefenseClaw
+   native gateway admits and launches the signed runner for raw proxy
+   tokenization and user-presence approval. The patch must be applied to
+   standalone s-gw before the integrated DefenseClaw release is pushed.
+2. `0002-defenseclaw-native-authorization-hardening.patch` rejects every CLI
+   `--allow-command` enrollment path before store construction and removes
+   native app, service, menu bar, and browser work from restricted setup.
+   Command authorization and approval UI remain owned by the admitted native
+   runner.
+3. `0003-update-fast-uri.patch` refreshes the transitive `fast-uri` lock entry
+   from 3.1.2 to 3.1.5 to remove the reviewed high-severity production
+   advisories without changing the exact upstream source mirror.
+4. `0004-update-mcp-sdk-dependencies.patch` refreshes the MCP SDK, Hono Node
+   server, and Hono lock entries to remove their reviewed production
+   advisories without changing the exact upstream source mirror.

@@ -34,6 +34,7 @@ import (
 // key from an env var (mirrors the secrets-sidecar handoff).
 func newDirectProviderProxy(t *testing.T, prov LLMProvider, insp ContentInspector, upstreamURL, apiKey string) *GuardrailProxy {
 	t.Helper()
+	allowRawForwardPrivateTargets(t)
 	// Use a unique env var per test so parallel tests don't collide.
 	envName := "DEFENSECLAW_TEST_LLM_KEY_" + sanitizeForEnv(t.Name())
 	t.Setenv(envName, apiKey)

@@ -15,3 +15,10 @@ schemas/config/v8/reference/observability.md text eol=lf
 # bytes. Disable checkout-time newline conversion so Windows materializes the
 # same payload that the dependency lock reviewed.
 schemas/telemetry/v8/upstream/** -text
+
+# The s-gw mirror is verified byte-for-byte against its pinned upstream tree.
+# Do not let platform checkout settings rewrite scripts or fixture files.
+third_party/s-gw/upstream/** -text
+
+# Unified diff context markers are part of the patch payload.
+third_party/s-gw/patches/*.patch -whitespace

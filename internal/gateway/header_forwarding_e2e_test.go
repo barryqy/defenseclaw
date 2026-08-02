@@ -47,6 +47,7 @@ func boolPtr(b bool) *bool { return &b }
 // policy classifies the request as "known" and forwards it.
 func newForwardingProxy(t *testing.T, upstreamURL string) *GuardrailProxy {
 	t.Helper()
+	allowRawForwardPrivateTargets(t)
 	cfg := &config.GuardrailConfig{
 		Enabled:   true,
 		Model:     "openai/gpt-4",
