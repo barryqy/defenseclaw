@@ -1352,6 +1352,53 @@ function Stage-PackageData([string]$PackageRoot) {
     }
 }
 
+function Copy-PackageBuildInputs([string]$Destination) {
+    $files = @(
+        'pyproject.toml',
+        'setup.py',
+        'defenseclaw_build_backend.py',
+        'README.md',
+        'LICENSE',
+        'NOTICE',
+        'MANIFEST.in',
+        'internal\envvars\registry.json',
+        'release\s-gw-module.json',
+        'release\s-gw-runners.json',
+        'scripts\build_sgw_module.py',
+        'scripts\sgw_module.py',
+        'scripts\stage_sgw_modules.py',
+        'scripts\sync_sgw_vendor.py',
+        'scripts\telemetry_runtime_assets.py',
+        'schemas\config\v8\defenseclaw-config.schema.json',
+        'schemas\config\v8\reference\observability.yaml',
+        'schemas\config\v8\reference\observability.md',
+        'schemas\telemetry\runtime\telemetry.schema.json.gz',
+        'schemas\telemetry\runtime\catalog.json.gz',
+        'schemas\telemetry\runtime\compatibility\v7-exporter-selection.json.gz',
+        'schemas\telemetry\runtime\compatibility\galileo-rich-v2.json.gz',
+        'schemas\telemetry\runtime\compatibility\local-observability-v1.json.gz',
+        'schemas\telemetry\runtime\compatibility\openinference-v1.json.gz'
+    )
+    foreach ($file in $files) {
+        $source = Join-Path $WorkspaceRoot $file
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw "required Python package build input is missing: $source"
+        }
+        $target = Join-Path $Destination $file
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $target)) | Out-Null
+        Copy-Item -LiteralPath $source -Destination $target -Force
+    }
+
+    foreach ($directory in @(
+        'cli\defenseclaw',
+        'bundles\local_observability_stack',
+        'bundles\splunk_local_bridge',
+        'third_party\s-gw'
+    )) {
+        Copy-Tree (Join-Path $WorkspaceRoot $directory) (Join-Path $Destination $directory)
+    }
+}
+
 function Invoke-BuildArtifacts {
     Assert-NativeWindowsX64
     $root = Assert-SafeStateRoot $StateRoot
@@ -1450,11 +1497,7 @@ function Invoke-BuildArtifacts {
         Remove-SafeDisposableTree -Path $packageStage -Root $root
     }
     [IO.Directory]::CreateDirectory($packageStage) | Out-Null
-    foreach ($file in @('pyproject.toml', 'README.md', 'LICENSE', 'NOTICE', 'MANIFEST.in')) {
-        Copy-Item -LiteralPath (Join-Path $WorkspaceRoot $file) -Destination $packageStage -Force
-    }
-    [IO.Directory]::CreateDirectory((Join-Path $packageStage 'cli')) | Out-Null
-    Copy-Tree (Join-Path $WorkspaceRoot 'cli\defenseclaw') (Join-Path $packageStage 'cli\defenseclaw')
+    Copy-PackageBuildInputs $packageStage
     Stage-PackageData (Join-Path $packageStage 'cli\defenseclaw')
     $packageVerificationStage = Join-Path $root 'package-source-verification'
     Copy-Tree $packageStage $packageVerificationStage
@@ -1494,6 +1537,9 @@ function Invoke-BuildArtifacts {
             'defenseclaw/_data/telemetry/v8/galileo-rich-v2.json',
             'defenseclaw/_data/telemetry/v8/local-observability-v1.json',
             'defenseclaw/_data/telemetry/v8/openinference-v1.json',
+            'defenseclaw/_data/sgw/sgw_module.py',
+            'defenseclaw/_data/sgw/s-gw-module.json',
+            'defenseclaw/_data/sgw/s-gw-runners.json',
             'defenseclaw/observability/local_splunk.py',
             'defenseclaw/_data/splunk_local_bridge/compose/docker-compose.local.yml',
             'defenseclaw/_data/splunk_local_bridge/splunk/default.yml',

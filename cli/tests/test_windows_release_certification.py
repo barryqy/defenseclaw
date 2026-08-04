@@ -707,6 +707,37 @@ def test_native_wheel_stages_and_verifies_v8_runtime_assets() -> None:
         assert packaged in build
 
 
+def test_native_wheel_stage_copies_local_pep517_build_inputs() -> None:
+    stage = _function("Copy-PackageBuildInputs")
+    build = _function("Invoke-BuildArtifacts")
+
+    for required in (
+        "defenseclaw_build_backend.py",
+        "setup.py",
+        "internal\\envvars\\registry.json",
+        "release\\s-gw-module.json",
+        "release\\s-gw-runners.json",
+        "scripts\\stage_sgw_modules.py",
+        "scripts\\telemetry_runtime_assets.py",
+        "schemas\\config\\v8\\defenseclaw-config.schema.json",
+        "schemas\\telemetry\\runtime\\catalog.json.gz",
+        "bundles\\local_observability_stack",
+        "bundles\\splunk_local_bridge",
+        "third_party\\s-gw",
+    ):
+        assert required in stage
+
+    copy = "Copy-PackageBuildInputs $packageStage"
+    wheel = "Invoke-WindowsNativeProcess $uv @('build', '--wheel'"
+    assert build.index(copy) < build.index(wheel)
+    for packaged in (
+        "defenseclaw/_data/sgw/sgw_module.py",
+        "defenseclaw/_data/sgw/s-gw-module.json",
+        "defenseclaw/_data/sgw/s-gw-runners.json",
+    ):
+        assert packaged in build
+
+
 def test_setup_acceptance_validates_packaged_resources_before_first_run() -> None:
     resource_contract = _function("Assert-PackagedV8ResourceContract")
     acceptance = _function("Invoke-SetupAcceptance")
