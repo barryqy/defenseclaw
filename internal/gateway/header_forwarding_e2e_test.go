@@ -47,7 +47,6 @@ func boolPtr(b bool) *bool { return &b }
 // policy classifies the request as "known" and forwards it.
 func newForwardingProxy(t *testing.T, upstreamURL string) *GuardrailProxy {
 	t.Helper()
-	allowRawForwardPrivateTargets(t)
 	cfg := &config.GuardrailConfig{
 		Enabled:   true,
 		Model:     "openai/gpt-4",
@@ -67,6 +66,7 @@ func newForwardingProxy(t *testing.T, upstreamURL string) *GuardrailProxy {
 		mode:            "observe",
 		skipAuthForTest: true,
 	}
+	allowRawForwardPrivateTargets(p)
 	p.resolveProviderFn = func(_ *ChatRequest) LLMProvider { return &mockProvider{} }
 	u, err := url.Parse(upstreamURL)
 	if err != nil {

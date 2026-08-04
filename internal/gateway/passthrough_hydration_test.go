@@ -34,7 +34,6 @@ import (
 // key from an env var (mirrors the secrets-sidecar handoff).
 func newDirectProviderProxy(t *testing.T, prov LLMProvider, insp ContentInspector, upstreamURL, apiKey string) *GuardrailProxy {
 	t.Helper()
-	allowRawForwardPrivateTargets(t)
 	// Use a unique env var per test so parallel tests don't collide.
 	envName := "DEFENSECLAW_TEST_LLM_KEY_" + sanitizeForEnv(t.Name())
 	t.Setenv(envName, apiKey)
@@ -63,6 +62,7 @@ func newDirectProviderProxy(t *testing.T, prov LLMProvider, insp ContentInspecto
 		mode:            "action",
 		skipAuthForTest: true,
 	}
+	allowRawForwardPrivateTargets(p)
 	p.resolveProviderFn = func(_ *ChatRequest) LLMProvider { return prov }
 
 	// The upstream URL host must pass isKnownProviderDomain, otherwise

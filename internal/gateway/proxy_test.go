@@ -1633,6 +1633,7 @@ func TestHandlePassthrough_AuthRejection(t *testing.T) {
 	prov := &mockProvider{}
 	insp := newMockInspector()
 	proxy := newTestProxy(t, prov, insp, "action")
+	allowRawForwardPrivateTargets(proxy)
 	proxy.gatewayToken = "secret-token"
 	proxy.skipAuthForTest = false
 
@@ -1857,6 +1858,7 @@ func TestHandlePassthrough_NonStreamingForward(t *testing.T) {
 	prov := &mockProvider{}
 	insp := newMockInspector()
 	proxy := newTestProxy(t, prov, insp, "observe")
+	allowRawForwardPrivateTargets(proxy)
 
 	body := mustJSON(t, map[string]interface{}{
 		"model":    "claude-opus-4-5",
@@ -1918,6 +1920,7 @@ func TestHandlePassthrough_ResponseBlock(t *testing.T) {
 		Reason:   "dangerous content",
 	})
 	proxy := newTestProxy(t, prov, insp, "action")
+	allowRawForwardPrivateTargets(proxy)
 
 	origDomains := providerDomains
 	providerDomains = append(providerDomains, struct {
@@ -2384,6 +2387,7 @@ func TestStreamBufferingPassthrough(t *testing.T) {
 	prov := &mockProvider{}
 	insp := newMockInspector()
 	proxy := newTestProxy(t, prov, insp, "action")
+	allowRawForwardPrivateTargets(proxy)
 	proxy.cfg.StreamBufferBytes = 2
 
 	body := mustJSON(t, map[string]interface{}{
@@ -2444,6 +2448,7 @@ func TestStreamBufferingBlock(t *testing.T) {
 		Reason:   "unsafe completion",
 	})
 	proxy := newTestProxy(t, prov, insp, "action")
+	allowRawForwardPrivateTargets(proxy)
 	proxy.cfg.StreamBufferBytes = 4
 
 	body := mustJSON(t, map[string]interface{}{
@@ -2493,6 +2498,7 @@ func TestStreamBufferingPassthroughFlushesBufferedEOF(t *testing.T) {
 	prov := &mockProvider{}
 	insp := newMockInspector()
 	proxy := newTestProxy(t, prov, insp, "action")
+	allowRawForwardPrivateTargets(proxy)
 	proxy.cfg.StreamBufferBytes = 1024
 
 	body := mustJSON(t, map[string]interface{}{

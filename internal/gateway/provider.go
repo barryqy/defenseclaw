@@ -681,13 +681,6 @@ func isUnsafeIP(ip net.IP) bool {
 	return false
 }
 
-// passthroughAllowPrivateForTest is a test-only seam letting the
-// passthrough integration tests simulate a "known provider" pointed
-// at httptest.NewServer (which binds 127.0.0.1). Production code MUST
-// leave this at false; the dedicated SSRF tests still route private
-// targets through the shape-branch which is not subject to this gate.
-var passthroughAllowPrivateForTest bool
-
 // secureDialContext returns a DialContext that re-resolves the
 // destination at dial time and rejects private/loopback/link-local/
 // cloud-metadata IPs (closes F-1306 DNS rebinding). When

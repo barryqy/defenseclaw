@@ -163,6 +163,10 @@ type GuardrailProxy struct {
 	// X-DC-Auth header. Production callers MUST never set this —
 	// it bypasses the security floor entirely.
 	skipAuthForTest bool
+
+	// Tests that forward to httptest.Server opt in per proxy. Production
+	// callers must leave this false so private upstreams stay blocked.
+	allowPrivatePassthroughForTest bool
 }
 
 // SetDefaultAgentName sets the agent name fallback for OTel spans when
@@ -2424,7 +2428,7 @@ func (p *GuardrailProxy) guardResolvedTargetURL(
 	}
 	if host := u.Hostname(); host != "" && isPrivateHost(host) &&
 		!isOllamaLoopback(targetURL+r.URL.Path, 0) &&
-		!passthroughAllowPrivateForTest {
+		!p.allowPrivatePassthroughForTest {
 		p.emitEgress(r.Context(), gatewaylog.EgressPayload{
 			TargetHost:   host,
 			TargetPath:   r.URL.Path,

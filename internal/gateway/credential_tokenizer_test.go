@@ -828,10 +828,6 @@ func TestCredentialTokenizationReadyRewritesBeforeInspectionAndUpstream(t *testi
 }
 
 func TestCredentialTokenizationChatRejectsTargetBeforeBroker(t *testing.T) {
-	originalPrivateBypass := passthroughAllowPrivateForTest
-	passthroughAllowPrivateForTest = false
-	t.Cleanup(func() { passthroughAllowPrivateForTest = originalPrivateBypass })
-
 	proxy := newTestProxy(t, &mockProvider{}, newMockInspector(), "action")
 	tokenizer := &fakeCredentialTokenizer{}
 	proxy.SetCredentialTokenizer(true, tokenizer)
@@ -851,10 +847,6 @@ func TestCredentialTokenizationChatRejectsTargetBeforeBroker(t *testing.T) {
 }
 
 func TestCredentialTokenizationChatRejectsConfiguredTargetsBeforeBroker(t *testing.T) {
-	originalPrivateBypass := passthroughAllowPrivateForTest
-	passthroughAllowPrivateForTest = false
-	t.Cleanup(func() { passthroughAllowPrivateForTest = originalPrivateBypass })
-
 	tests := []struct {
 		name       string
 		target     string
@@ -1199,8 +1191,8 @@ func TestCredentialTokenizationPassthroughRewritesBeforeForwarding(t *testing.T)
 	defer upstream.Close()
 
 	registerRawForwardProviderDomain(t, upstream.URL, "anthropic")
-	allowRawForwardPrivateTargets(t)
 	proxy := newTestProxy(t, &mockProvider{}, newMockInspector(), "action")
+	allowRawForwardPrivateTargets(proxy)
 	proxy.SetCredentialTokenizer(true, &fakeCredentialTokenizer{
 		prepare: func(_ context.Context, request CredentialTokenizationRequest) (CredentialTokenizationResult, error) {
 			return readyCredentialResult(request), nil
@@ -1247,13 +1239,13 @@ func TestCredentialTokenizationProtectsManagedPromptVariables(t *testing.T) {
 		defer upstream.Close()
 
 		registerRawForwardProviderDomain(t, upstream.URL, "openai")
-		allowRawForwardPrivateTargets(t)
 		tokenizer := &fakeCredentialTokenizer{
 			prepare: func(_ context.Context, request CredentialTokenizationRequest) (CredentialTokenizationResult, error) {
 				return readyCredentialResult(request), nil
 			},
 		}
 		proxy := newTestProxy(t, &mockProvider{}, newMockInspector(), "action")
+		allowRawForwardPrivateTargets(proxy)
 		proxy.SetCredentialTokenizer(true, tokenizer)
 
 		body := []byte(`{"prompt":{"id":"pmpt_test","variables":{"token":"` + rawValue + `"}}}`)
@@ -1295,13 +1287,13 @@ func TestCredentialTokenizationProtectsManagedPromptVariables(t *testing.T) {
 		defer upstream.Close()
 
 		registerRawForwardProviderDomain(t, upstream.URL, "bedrock")
-		allowRawForwardPrivateTargets(t)
 		tokenizer := &fakeCredentialTokenizer{
 			prepare: func(_ context.Context, request CredentialTokenizationRequest) (CredentialTokenizationResult, error) {
 				return readyCredentialResult(request), nil
 			},
 		}
 		proxy := newTestProxy(t, &mockProvider{}, newMockInspector(), "action")
+		allowRawForwardPrivateTargets(proxy)
 		proxy.SetCredentialTokenizer(true, tokenizer)
 
 		body := []byte(`{"promptVariables":{"token":{"text":"synthetic-bedrock-prompt-variable"}}}`)
