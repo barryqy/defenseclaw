@@ -3,3 +3,4 @@
 0003-update-fast-uri.patch
 0004-update-mcp-sdk-dependencies.patch
 0005-platform-credential-source-metadata.patch
+0006-windows-safe-tsx-launcher.patch

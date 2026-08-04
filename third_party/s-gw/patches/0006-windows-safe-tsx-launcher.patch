@@ -1,0 +1,82 @@
+diff --git a/tests/mcp-e2e.test.ts b/tests/mcp-e2e.test.ts
+--- a/tests/mcp-e2e.test.ts
++++ b/tests/mcp-e2e.test.ts
+@@ -11,7 +11,7 @@ let tmpHome = "";
+ let testEnv: NodeJS.ProcessEnv;
+ 
+ const repoRoot = process.cwd();
+-const tsxBin = path.join(repoRoot, "node_modules", ".bin", process.platform === "win32" ? "tsx.cmd" : "tsx");
++const tsxCli = path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
+ 
+ beforeEach(async () => {
+   tmpHome = await mkdtemp(path.join(os.tmpdir(), "sgw-mcp-e2e-"));
+@@ -34,8 +34,8 @@ afterEach(async () => {
+ describe("MCP end-to-end flow", () => {
+   it("starts through the primary CLI", async () => {
+     const transport = new StdioClientTransport({
+-      command: tsxBin,
+-      args: ["src/cli.ts", "mcp"],
++      command: process.execPath,
++      args: [tsxCli, "src/cli.ts", "mcp"],
+       cwd: repoRoot,
+       env: testEnv as Record<string, string>,
+       stderr: "pipe"
+@@ -73,8 +73,8 @@ describe("MCP end-to-end flow", () => {
+     await allowCommandAsNativeFixture(addPayload.handle, process.execPath);
+ 
+     const transport = new StdioClientTransport({
+-      command: tsxBin,
+-      args: ["src/mcp-server.ts"],
++      command: process.execPath,
++      args: [tsxCli, "src/mcp-server.ts"],
+       cwd: repoRoot,
+       env: testEnv as Record<string, string>,
+       stderr: "pipe"
+@@ -136,7 +136,7 @@ describe("MCP end-to-end flow", () => {
+ });
+ 
+ function runCli(args: string[], input?: string): string {
+-  return execFileSync(tsxBin, ["src/cli.ts", ...args], {
++  return execFileSync(process.execPath, [tsxCli, "src/cli.ts", ...args], {
+     cwd: repoRoot,
+     env: testEnv,
+     input,
+diff --git a/tests/defenseclaw-runtime.test.ts b/tests/defenseclaw-runtime.test.ts
+--- a/tests/defenseclaw-runtime.test.ts
++++ b/tests/defenseclaw-runtime.test.ts
+@@ -6,7 +6,7 @@
+ import { describe, expect, it } from "vitest";
+ 
+ const repoRoot = process.cwd();
+-const tsxBin = path.join(repoRoot, "node_modules", ".bin", process.platform === "win32" ? "tsx.cmd" : "tsx");
++const tsxCli = path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
+ 
+ describe("DefenseClaw local console launch", () => {
+   it("admits only the host-resolved PowerShell path on Windows", async () => {
+@@ -101,7 +101,7 @@ describe("DefenseClaw local console launch", () => {
+       const recoveryHome = path.join(tmpDir, "recovery");
+ 
+       try {
+-        const result = spawnSync(tsxBin, [path.join(repoRoot, "src", "cli.ts"), ...route], {
++        const result = spawnSync(process.execPath, [tsxCli, path.join(repoRoot, "src", "cli.ts"), ...route], {
+           cwd: repoRoot,
+           encoding: "utf8",
+           env: {
+@@ -147,7 +147,7 @@ describe("DefenseClaw local console launch", () => {
+       const recoveryHome = path.join(tmpDir, "recovery");
+ 
+       try {
+-        const result = spawnSync(tsxBin, [path.join(repoRoot, "src", "cli.ts"), ...route], {
++        const result = spawnSync(process.execPath, [tsxCli, path.join(repoRoot, "src", "cli.ts"), ...route], {
+           cwd: repoRoot,
+           encoding: "utf8",
+           env: {
+@@ -211,7 +211,7 @@ describe("DefenseClaw local console launch", () => {
+         SGW_TEST_HOME_ROOT: tmpDir,
+         SGW_TEST_MODE: "1"
+       };
+-      const runCli = (args: string[], input?: string) => execFileSync(tsxBin, [wrapper, ...args], {
++      const runCli = (args: string[], input?: string) => execFileSync(process.execPath, [tsxCli, wrapper, ...args], {
+         cwd: repoRoot,
+         encoding: "utf8",
+         env,

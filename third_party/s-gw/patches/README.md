@@ -33,3 +33,7 @@ Current queue:
    keychain. Its Linux runtime regression covers setup and keychain enrollment
    through a fake Secret Service helper. This matches standalone s-gw commit
    `ec1912085f0747d725dac32ca3d26e19c412abf2`.
+6. `0006-windows-safe-tsx-launcher.patch` starts TypeScript test entrypoints
+   through Node and the portable `tsx` module CLI instead of invoking a
+   platform-specific package-manager shim. This matches standalone s-gw commit
+   `e05cc5b5760fea969cfed88d7a2e0cef4dd3500d`.
