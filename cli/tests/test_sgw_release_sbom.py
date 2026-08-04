@@ -199,6 +199,38 @@ def test_source_only_wheel_rejects_missing_or_tampered_operational_metadata(
         stage_sgw_modules.validate_source_only_wheel(changed, version="0.8.11")
 
 
+@pytest.mark.parametrize(
+    ("member", "replacement"),
+    (
+        ("WHEEL", None),
+        ("entry_points.txt", None),
+        ("WHEEL", b"Wheel-Version: 9.9\n"),
+        ("entry_points.txt", b"[console_scripts]\ndefenseclaw = attacker:main\n"),
+    ),
+)
+def test_production_wheel_rejects_missing_or_tampered_operational_metadata(
+    tmp_path: Path,
+    member: str,
+    replacement: bytes | None,
+) -> None:
+    fixture = _fixture(tmp_path)
+    wheel = fixture.payload_root / f"defenseclaw-{fixture.version}-py3-none-any.whl"
+    entries, dist_info = _wheel_entries(wheel)
+    path = f"{dist_info}/{member}"
+    if replacement is None:
+        entries.pop(path)
+    else:
+        entries[path] = replacement
+    _write_wheel(wheel, entries, dist_info)
+
+    with pytest.raises(stage_sgw_modules.DeliveryError, match="operational metadata"):
+        stage_sgw_modules._validate_wheel_license_metadata(
+            wheel,
+            version=fixture.version,
+            core_terms=SGW_CORE_TERMS,
+        )
+
+
 @pytest.mark.parametrize("change", ["mixed-license", "production-file"])
 def test_source_only_wheel_profile_rejects_non_source_inventory(
     tmp_path: Path,
