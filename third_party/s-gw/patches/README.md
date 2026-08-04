@@ -24,6 +24,7 @@ Current queue:
 3. `0003-update-fast-uri.patch` refreshes the transitive `fast-uri` lock entry
    from 3.1.2 to 3.1.5 to remove the reviewed high-severity production
    advisories without changing the exact upstream source mirror.
-4. `0004-update-mcp-sdk-dependencies.patch` refreshes the MCP SDK, Hono Node
-   server, and Hono lock entries to remove their reviewed production
-   advisories without changing the exact upstream source mirror.
+4. `0004-update-mcp-sdk-dependencies.patch` refreshes the MCP SDK and its Hono
+   and IP-address runtime dependencies, together with the PostCSS build chain,
+   to remove their reviewed advisories without changing the exact upstream
+   source mirror.

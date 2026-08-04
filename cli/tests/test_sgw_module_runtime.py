@@ -92,6 +92,32 @@ def write_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def test_patched_lock_keeps_advisory_fixed_versions_on_public_vendor(tmp_path: Path) -> None:
+    manifest = json.loads(MODULE_MANIFEST.read_text(encoding="utf-8"))
+    inventory_path = ROOT / manifest["source_inventory"]
+    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+
+    assert manifest["upstream_repository"] == "https://github.com/sgateway/s-gw.git"
+    assert manifest["upstream_revision"] == inventory["revision"]
+
+    stage = tmp_path / "source"
+    shutil.copytree(ROOT / manifest["source_path"], stage)
+    build_sgw_module.apply_patches(stage, build_sgw_module.patch_queue(manifest))
+
+    package_lock = json.loads((stage / "package-lock.json").read_text(encoding="utf-8"))
+    packages = package_lock["packages"]
+    expected = {
+        "node_modules/@hono/node-server": "2.1.0",
+        "node_modules/@modelcontextprotocol/sdk": "1.30.0",
+        "node_modules/fast-uri": "3.1.5",
+        "node_modules/hono": "4.13.0",
+        "node_modules/ip-address": "10.4.0",
+        "node_modules/nanoid": "3.3.17",
+        "node_modules/postcss": "8.5.25",
+    }
+    assert {name: packages[name]["version"] for name in expected} == expected
+
+
 def signature(private_key: Ed25519PrivateKey, payload: bytes) -> str:
     return base64.b64encode(private_key.sign(payload)).decode("ascii")
 
