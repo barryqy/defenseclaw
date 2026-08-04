@@ -571,6 +571,240 @@ def test_windows_private_acl_uses_bounded_powershell_arguments(
     assert 'shutil.which("powershell.exe")' not in source
 
 
+def test_windows_private_acl_replaces_only_owner_and_access_sections() -> None:
+    script = sgw_module._WINDOWS_PRIVATE_ACL_SCRIPT
+
+    assert "RemoveAccessRuleSpecific" not in script
+    assert "$observed.SetSecurityDescriptorSddlForm($replacementSddl, $sections)" in script
+    assert "$item.SetAccessControl($observed)" in script
+    assert "Set-Acl -LiteralPath $item.FullName" not in script
+    assert (
+        """$sections = [System.Security.AccessControl.AccessControlSections]::Owner -bor `
+            [System.Security.AccessControl.AccessControlSections]::Access"""
+        in script
+    )
+
+
+def test_windows_private_acl_checks_each_ace_scope_before_unioning_rights() -> None:
+    script = sgw_module._WINDOWS_PRIVATE_ACL_SCRIPT
+    scope_check = """if ($rule.InheritanceFlags -ne $expectedInheritance -or
+            $rule.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None)"""
+
+    assert "GetAccessRules($true, $true" in script
+    assert 'if ($rule.IsInherited) { throw "managed ACL inherits an access rule" }' in script
+    assert "$inheritanceBySid" not in script
+    assert script.index(scope_check) < script.index("$rights[$sid] = $rights[$sid] -bor $rule.FileSystemRights")
+
+
+def run_native_windows_powershell(script: str, *arguments: Path) -> subprocess.CompletedProcess[str]:
+    powershell = sgw_module.trusted_windows_powershell(code="test_failed")
+    return subprocess.run(
+        [
+            powershell,
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+            *(str(argument) for argument in arguments),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        shell=False,
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires native Windows owner/DACL APIs")
+def test_native_windows_acl_apply_recursively_removes_unwanted_aces(tmp_path: Path) -> None:
+    managed = tmp_path / "managed"
+    nested = managed / "nested"
+    nested.mkdir(parents=True)
+    (nested / "receipt.json").write_text("{}\n", encoding="utf-8")
+    run_native_windows_powershell(
+        r"""
+$ErrorActionPreference = "Stop"
+$currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$systemSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-18")
+$everyoneSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-1-0")
+$root = Get-Item -LiteralPath $args[0] -Force -ErrorAction Stop
+$items = @($root) + @(Get-ChildItem -LiteralPath $root.FullName -Force -Recurse -ErrorAction Stop)
+foreach ($item in $items) {
+    $isDirectory = [bool]$item.PSIsContainer
+    $acl = if ($isDirectory) {
+        [System.Security.AccessControl.DirectorySecurity]::new()
+    } else {
+        [System.Security.AccessControl.FileSecurity]::new()
+    }
+    $inheritance = if ($isDirectory) {
+        [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
+            [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    } else {
+        [System.Security.AccessControl.InheritanceFlags]::None
+    }
+    $acl.SetOwner($currentSid)
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @($currentSid, $systemSid)) {
+        [void]$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+            $sid,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            $inheritance,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow
+        ))
+    }
+    [void]$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+        $everyoneSid,
+        [System.Security.AccessControl.FileSystemRights]::ReadAndExecute,
+        $inheritance,
+        [System.Security.AccessControl.PropagationFlags]::None,
+        [System.Security.AccessControl.AccessControlType]::Allow
+    ))
+    Set-Acl -LiteralPath $item.FullName -AclObject $acl -ErrorAction Stop
+}
+""",
+        managed,
+    )
+
+    with pytest.raises(sgw_module.ModuleError, match="private Windows ACL"):
+        sgw_module.windows_private_acl(
+            managed,
+            operation="verify",
+            recursive=True,
+            code="artifact_invalid",
+        )
+
+    sgw_module.windows_private_acl(
+        managed,
+        operation="apply",
+        recursive=True,
+        code="artifact_invalid",
+    )
+    sgw_module.windows_private_acl(
+        managed,
+        operation="verify",
+        recursive=True,
+        code="artifact_invalid",
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires native Windows owner/DACL APIs")
+def test_native_windows_acl_rejects_split_inheritance_across_aces(tmp_path: Path) -> None:
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    run_native_windows_powershell(
+        r"""
+$ErrorActionPreference = "Stop"
+$currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$sddl = "O:$($currentSid)D:P" +
+    "(A;;FA;;;$currentSid)" +
+    "(A;OICI;RC;;;$currentSid)" +
+    "(A;OICI;FA;;;SY)"
+$acl = [System.Security.AccessControl.DirectorySecurity]::new()
+$acl.SetSecurityDescriptorSddlForm($sddl)
+Set-Acl -LiteralPath $args[0] -AclObject $acl -ErrorAction Stop
+""",
+        managed,
+    )
+
+    with pytest.raises(sgw_module.ModuleError, match="private Windows ACL"):
+        sgw_module.windows_private_acl(
+            managed,
+            operation="verify",
+            recursive=False,
+            code="artifact_invalid",
+        )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires native Windows reparse points")
+def test_native_windows_acl_rejects_reparse_points_in_recursive_tree(tmp_path: Path) -> None:
+    managed = tmp_path / "managed"
+    target = tmp_path / "outside"
+    managed.mkdir()
+    target.mkdir()
+    sgw_module.windows_private_acl(
+        managed,
+        operation="apply",
+        recursive=True,
+        code="artifact_invalid",
+    )
+    junction = managed / "junction"
+    run_native_windows_powershell(
+        "New-Item -ItemType Junction -Path $args[0] -Target $args[1] -ErrorAction Stop | Out-Null",
+        junction,
+        target,
+    )
+
+    try:
+        with pytest.raises(sgw_module.ModuleError, match="private Windows ACL"):
+            sgw_module.windows_private_acl(
+                managed,
+                operation="verify",
+                recursive=True,
+                code="artifact_invalid",
+            )
+    finally:
+        run_native_windows_powershell(
+            "Remove-Item -LiteralPath $args[0] -Force -ErrorAction Stop",
+            junction,
+        )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires native Windows owner/DACL APIs")
+def test_native_windows_acl_apply_normalizes_noncanonical_dacl(tmp_path: Path) -> None:
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    group_before = run_native_windows_powershell(
+        r"""
+$ErrorActionPreference = "Stop"
+$currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$sections = [System.Security.AccessControl.AccessControlSections]::Owner -bor `
+    [System.Security.AccessControl.AccessControlSections]::Access
+$acl = Get-Acl -LiteralPath $args[0] -ErrorAction Stop
+$sddl = "O:$($currentSid)D:P" +
+    "(A;OICI;FA;;;$currentSid)" +
+    "(A;OICI;FA;;;SY)" +
+    "(D;OICI;WD;;;WD)"
+$acl.SetSecurityDescriptorSddlForm($sddl, $sections)
+Set-Acl -LiteralPath $args[0] -AclObject $acl -ErrorAction Stop
+$observed = Get-Acl -LiteralPath $args[0] -ErrorAction Stop
+if ($observed.AreAccessRulesCanonical) { throw "fixture DACL was canonicalized" }
+$observed.GetSecurityDescriptorSddlForm(
+    [System.Security.AccessControl.AccessControlSections]::Group
+)
+""",
+        managed,
+    ).stdout.strip()
+
+    sgw_module.windows_private_acl(
+        managed,
+        operation="apply",
+        recursive=False,
+        code="artifact_invalid",
+    )
+    sgw_module.windows_private_acl(
+        managed,
+        operation="verify",
+        recursive=False,
+        code="artifact_invalid",
+    )
+    group_after = run_native_windows_powershell(
+        r"""
+$acl = Get-Acl -LiteralPath $args[0] -ErrorAction Stop
+if (-not $acl.AreAccessRulesCanonical) { throw "managed DACL remains noncanonical" }
+$acl.GetSecurityDescriptorSddlForm(
+    [System.Security.AccessControl.AccessControlSections]::Group
+)
+""",
+        managed,
+    ).stdout.strip()
+
+    assert group_after == group_before
+
+
 def test_runtime_json_rejects_duplicate_keys_and_bounded_output(tmp_path: Path) -> None:
     duplicate = tmp_path / "duplicate.json"
     duplicate.write_text('{"schema_version":1,"schema_version":1}\n', encoding="utf-8")

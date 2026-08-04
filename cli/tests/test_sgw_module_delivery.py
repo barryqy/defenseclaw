@@ -612,6 +612,23 @@ def test_vendor_inventory_binds_each_file_to_its_git_blob(
         sync_sgw_vendor.verify()
 
 
+def test_sgw_checkout_contract_uses_git_modes_and_exact_bytes(tmp_path: Path) -> None:
+    source = tmp_path / "source.ts"
+    source.write_text("export {};\n", encoding="utf-8")
+    source.chmod(0o644)
+
+    assert sync_sgw_vendor.checkout_mode(source, platform_name="posix") == 0o644
+    assert sync_sgw_vendor.checkout_mode(source, platform_name="nt") is None
+
+    attributes = set((ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines())
+    assert {
+        "LICENSE text eol=lf",
+        "NOTICE text eol=lf",
+        "third_party/s-gw/upstream/** -text",
+        "third_party/s-gw/patches/*.patch -text -whitespace",
+    }.issubset(attributes)
+
+
 def test_isolated_pep517_sdist_excludes_staged_modules_and_wheel_restages_them(tmp_path: Path) -> None:
     if importlib.util.find_spec("build.__main__") is None:
         pytest.fail("the locked build frontend is unavailable")
@@ -1105,12 +1122,20 @@ def test_production_notice_enforces_shared_output_limit() -> None:
         stage_sgw_modules.production_notice(b"N" * base_size + b"\n", terms)
 
 
-def test_tampered_artifact_checksum_is_rejected_before_publish(tmp_path: Path) -> None:
+def test_tampered_artifact_checksum_is_rejected_before_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     runtime, artifact_dir = fake_release(tmp_path)
     module = json.loads(MODULE_MANIFEST.read_text(encoding="utf-8"))
     target = TARGETS[-1]
     artifact = artifact_dir / module["artifact"]["filename_template"].format(target=target)
     artifact.write_bytes(artifact.read_bytes() + b"tampered")
+
+    def unexpected_archive_validation(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("checksums must be validated before any module archive")
+
+    monkeypatch.setattr(stage_sgw_modules, "validate_module_archive", unexpected_archive_validation)
     args = stage_args(tmp_path, runtime=runtime, artifact_dir=artifact_dir, require_all=True)
     args.destination.mkdir()
     marker = args.destination / "keep.txt"

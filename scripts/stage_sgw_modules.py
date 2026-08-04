@@ -31,6 +31,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import unicodedata
 import urllib.parse
 import zipfile
 from datetime import datetime, timezone
@@ -62,12 +63,27 @@ MAX_PACKAGE_LOCK_BYTES = 32 * 1024 * 1024
 MAX_SOURCE_LICENSE_BYTES = 4 * 1024 * 1024
 MAX_CORE_LICENSE_BYTES = 1024 * 1024
 MAX_WHEEL_NOTICE_BYTES = 5 * 1024 * 1024
+EXPECTED_WHEEL_METADATA = (
+    b"Wheel-Version: 1.0\nGenerator: setuptools (82.0.1)\nRoot-Is-Purelib: true\nTag: py3-none-any\n\n"
+)
+EXPECTED_ENTRY_POINTS = (
+    b"[console_scripts]\n"
+    b"defenseclaw = defenseclaw.main:main\n"
+    b"defenseclaw-observability = defenseclaw.observability.local_stack:main\n"
+)
 SGW_CORE_LICENSE = "LicenseRef-s-gw-Core"
 SGW_MIXED_LICENSE = f"Apache-2.0 AND {SGW_CORE_LICENSE}"
 SGW_CORE_LICENSE_BEGIN = f"----- BEGIN {SGW_CORE_LICENSE} -----"
 SGW_CORE_LICENSE_END = f"----- END {SGW_CORE_LICENSE} -----"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+DOS_DEVICE_RE = re.compile(
+    r"^(?:CON|PRN|AUX|NUL|CLOCK\$|COM[1-9¹²³]|LPT[1-9¹²³])$",
+    re.IGNORECASE,
+)
+DOS_SHORT_NAME_RE = re.compile(r"^[A-Z0-9_]{1,6}~[1-9][0-9]*(?:\.[A-Z0-9_]{0,3})?$", re.IGNORECASE)
+WINDOWS_FORBIDDEN_RE = re.compile(r'[<>"|?*]')
+CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 class DeliveryError(RuntimeError):
@@ -254,17 +270,19 @@ def validate_artifact_set(
     runtime = parse_json(runtime_payload, label="s-gw runtime manifest")
     expected = expected_artifacts(artifact_dir, manifest)
     digests: dict[str, str] = {}
+    controls: dict[str, tuple[dict[str, Any], dict[str, dict[str, Any]]]] = {}
     for target, (artifact, checksum) in expected.items():
         regular_metadata(artifact, label=f"{target} s-gw module", max_bytes=MAX_ARTIFACT_BYTES)
-        digest = validated_checksum(checksum, artifact)
-        reviewed_manifest, records = module_control(
+        digests[target] = validated_checksum(checksum, artifact)
+        controls[target] = module_control(
             module_payload,
             runtime_payload,
             target,
             require_approved=True,
         )
+    for target, (artifact, _checksum) in expected.items():
+        reviewed_manifest, records = controls[target]
         validate_module_archive(artifact, reviewed_manifest, target, records)
-        digests[target] = digest
     return digests, runtime
 
 
@@ -452,10 +470,13 @@ def verify_wheel(args: argparse.Namespace) -> dict[str, object]:
         expected.update({base, f"{base}.sha256"})
     try:
         with zipfile.ZipFile(wheel) as archive:
-            names = archive.namelist()
-            if len(names) != len(set(names)):
-                raise DeliveryError("wheel contains duplicate members")
-            observed = {name for name in names if name.startswith(prefix)}
+            infos = _validated_wheel_archive_members(archive)
+            names = [info.filename for info in infos]
+            observed = {
+                name
+                for name in names
+                if [part.casefold() for part in name.split("/")[:3]] == ["defenseclaw", "_data", "sgw"]
+            }
             if observed != expected:
                 missing = sorted(expected - observed)
                 unexpected = sorted(observed - expected)
@@ -464,8 +485,7 @@ def verify_wheel(args: argparse.Namespace) -> dict[str, object]:
                 staged = Path(temp) / "sgw"
                 for name in sorted(expected):
                     info = archive.getinfo(name)
-                    mode = info.external_attr >> 16
-                    if info.is_dir() or stat.S_ISLNK(mode):
+                    if not _wheel_member_is_regular(info):
                         raise DeliveryError(f"wheel contains an unsafe s-gw member: {name}")
                     relative = PurePosixPath(name.removeprefix(prefix))
                     output = staged.joinpath(*relative.parts)
@@ -924,7 +944,7 @@ def _wheel_version(archive: zipfile.ZipFile) -> str:
     if len(metadata) != 1:
         raise DeliveryError("DefenseClaw wheel must contain exactly one distribution metadata file")
     info = archive.getinfo(metadata[0])
-    if info.file_size <= 0 or info.file_size > MAX_JSON_BYTES:
+    if not _wheel_member_is_regular(info) or info.file_size <= 0 or info.file_size > MAX_JSON_BYTES:
         raise DeliveryError("DefenseClaw wheel distribution metadata has an invalid size")
     document = BytesParser(policy=policy.default).parsebytes(archive.read(info))
     if (document.get("Name") or "").strip().lower() != "defenseclaw":
@@ -935,24 +955,173 @@ def _wheel_version(archive: zipfile.ZipFile) -> str:
     return version
 
 
+def _validated_wheel_member_identity(raw_name: str) -> tuple[str, bool]:
+    if not raw_name:
+        raise DeliveryError("DefenseClaw wheel contains a non-canonical wheel member path: empty name")
+    if "\\" in raw_name or raw_name.startswith("/") or ":" in raw_name:
+        raise DeliveryError(f"DefenseClaw wheel contains a non-canonical wheel member path: {raw_name}")
+    if CONTROL_CHARACTER_RE.search(raw_name):
+        raise DeliveryError(f"DefenseClaw wheel contains a non-canonical wheel member path: {raw_name}")
+    if unicodedata.normalize("NFC", raw_name) != raw_name:
+        raise DeliveryError(f"DefenseClaw wheel contains a non-canonical wheel member path: {raw_name}")
+
+    is_directory = raw_name.endswith("/")
+    identity = raw_name[:-1] if is_directory else raw_name
+    if not identity or "//" in identity:
+        raise DeliveryError(f"DefenseClaw wheel contains a non-canonical wheel member path: {raw_name}")
+    for component in identity.split("/"):
+        if not component or component in {".", ".."}:
+            raise DeliveryError(f"DefenseClaw wheel contains a non-canonical wheel member path: {raw_name}")
+        if WINDOWS_FORBIDDEN_RE.search(component) or component.endswith((".", " ")):
+            raise DeliveryError(f"DefenseClaw wheel contains a non-canonical wheel member path: {raw_name}")
+        stem = component.split(".", 1)[0].rstrip(" .")
+        if DOS_DEVICE_RE.fullmatch(stem) or DOS_SHORT_NAME_RE.fullmatch(component):
+            raise DeliveryError(f"DefenseClaw wheel contains a non-canonical wheel member path: {raw_name}")
+    return identity, is_directory
+
+
+def _wheel_member_is_regular(info: zipfile.ZipInfo) -> bool:
+    mode = info.external_attr >> 16
+    file_type = stat.S_IFMT(mode)
+    unsafe_dos_attributes = 0x10 | 0x400
+    return not info.is_dir() and not (info.external_attr & unsafe_dos_attributes) and file_type in {0, stat.S_IFREG}
+
+
+def _validated_wheel_archive_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
+    infos = archive.infolist()
+    if not infos or len(infos) > sgw_module.MAX_ARCHIVE_FILES:
+        raise DeliveryError("DefenseClaw wheel has an invalid member count")
+
+    names = [info.filename for info in infos]
+    if len(names) != len(set(names)):
+        raise DeliveryError("wheel contains duplicate members")
+
+    identities: dict[str, str] = {}
+    prefix_spellings: dict[tuple[str, ...], tuple[str, ...]] = {}
+    file_paths: set[tuple[str, ...]] = set()
+    parent_paths: set[tuple[str, ...]] = set()
+    total = 0
+    for info in infos:
+        if info.orig_filename != info.filename:
+            raise DeliveryError(f"DefenseClaw wheel contains a non-canonical wheel member path: {info.orig_filename}")
+        identity, is_directory = _validated_wheel_member_identity(info.filename)
+        folded = unicodedata.normalize("NFC", identity).casefold()
+        prior = identities.get(folded)
+        if prior is not None:
+            raise DeliveryError(f"DefenseClaw wheel contains case-insensitive member aliases: {prior}, {info.filename}")
+        identities[folded] = info.filename
+
+        exact_parts = tuple(identity.split("/"))
+        folded_parts = tuple(unicodedata.normalize("NFC", part).casefold() for part in exact_parts)
+        for depth in range(1, len(folded_parts) + 1):
+            prefix = folded_parts[:depth]
+            spelling = exact_parts[:depth]
+            prior_spelling = prefix_spellings.get(prefix)
+            if prior_spelling is not None and prior_spelling != spelling:
+                raise DeliveryError(
+                    "DefenseClaw wheel contains case-insensitive hierarchy aliases: "
+                    f"{'/'.join(prior_spelling)}, {'/'.join(spelling)}"
+                )
+            prefix_spellings[prefix] = spelling
+            if depth < len(folded_parts):
+                if prefix in file_paths:
+                    raise DeliveryError(
+                        f"DefenseClaw wheel contains a regular-file member used as a directory: {'/'.join(spelling)}"
+                    )
+                parent_paths.add(prefix)
+        if not is_directory:
+            if folded_parts in parent_paths:
+                raise DeliveryError(
+                    f"DefenseClaw wheel contains a regular-file member used as a directory: {info.filename}"
+                )
+            file_paths.add(folded_parts)
+
+        mode = info.external_attr >> 16
+        file_type = stat.S_IFMT(mode)
+        if is_directory:
+            if info.external_attr & 0x400 or info.file_size != 0 or file_type not in {0, stat.S_IFDIR}:
+                raise DeliveryError(f"DefenseClaw wheel contains an unsafe member type: {info.filename}")
+            continue
+        if not _wheel_member_is_regular(info):
+            raise DeliveryError(f"DefenseClaw wheel contains an unsafe member type: {info.filename}")
+        if info.flag_bits & 0x1:
+            raise DeliveryError(f"DefenseClaw wheel contains an encrypted member: {info.filename}")
+        if info.file_size < 0 or info.file_size > sgw_module.MAX_ARCHIVE_FILE_BYTES:
+            raise DeliveryError(f"DefenseClaw wheel member has an invalid size: {info.filename}")
+        total += info.file_size
+        if total > sgw_module.MAX_ARCHIVE_TOTAL_BYTES:
+            raise DeliveryError("DefenseClaw wheel expands beyond the allowed size")
+    return infos
+
+
+def _wheel_member_sha256(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    total = 0
+    with archive.open(info, "r") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            total += len(chunk)
+            if total > info.file_size:
+                raise DeliveryError(f"DefenseClaw wheel member changed while it was read: {info.filename}")
+            digest.update(chunk)
+    if total != info.file_size:
+        raise DeliveryError(f"DefenseClaw wheel member changed while it was read: {info.filename}")
+    encoded = base64.urlsafe_b64encode(digest.digest()).rstrip(b"=").decode("ascii")
+    return encoded, total
+
+
+def _single_metadata_header(metadata: Any, name: str, *, message: str) -> str:
+    values = metadata.get_all(name, [])
+    if len(values) != 1:
+        raise DeliveryError(message)
+    return values[0].strip()
+
+
+def _validated_operational_wheel_metadata(
+    archive: zipfile.ZipFile,
+    *,
+    names: list[str],
+    dist_info: PurePosixPath,
+) -> dict[str, bytes]:
+    expected = {
+        f"{dist_info.as_posix()}/WHEEL": EXPECTED_WHEEL_METADATA,
+        f"{dist_info.as_posix()}/entry_points.txt": EXPECTED_ENTRY_POINTS,
+    }
+    for canonical, payload in expected.items():
+        suffix = "/" + PurePosixPath(canonical).name.casefold()
+        observed = [name for name in names if name.casefold().endswith(f".dist-info{suffix}")]
+        if observed != [canonical]:
+            raise DeliveryError(f"DefenseClaw wheel operational metadata is incomplete: {canonical}")
+        info = archive.getinfo(canonical)
+        if not _wheel_member_is_regular(info) or info.file_size != len(payload):
+            raise DeliveryError(f"DefenseClaw wheel operational metadata is unsafe: {canonical}")
+        if archive.read(info) != payload:
+            raise DeliveryError(f"DefenseClaw wheel operational metadata is inconsistent: {canonical}")
+    return expected
+
+
 def _validate_recorded_wheel_members(
     archive: zipfile.ZipFile,
     *,
     dist_info: PurePosixPath,
     members: dict[str, bytes],
+    require_complete: bool = False,
 ) -> None:
     record_name = f"{dist_info.as_posix()}/RECORD"
     if archive.namelist().count(record_name) != 1:
         raise DeliveryError("DefenseClaw production wheel must contain exactly one RECORD")
     info = archive.getinfo(record_name)
-    mode = info.external_attr >> 16
-    if info.is_dir() or stat.S_ISLNK(mode) or info.file_size <= 0 or info.file_size > MAX_JSON_BYTES:
+    if not _wheel_member_is_regular(info) or info.file_size <= 0 or info.file_size > MAX_JSON_BYTES:
         raise DeliveryError("DefenseClaw production wheel RECORD is unsafe")
     record_payload = archive.read(info)
     if len(record_payload) != info.file_size or b"\0" in record_payload:
         raise DeliveryError("DefenseClaw production wheel RECORD is malformed")
     try:
-        rows = list(csv.reader(io.StringIO(record_payload.decode("utf-8", errors="strict"), newline="")))
+        rows = list(
+            csv.reader(
+                io.StringIO(record_payload.decode("utf-8", errors="strict"), newline=""),
+                strict=True,
+            )
+        )
     except (UnicodeDecodeError, csv.Error) as exc:
         raise DeliveryError("DefenseClaw production wheel RECORD is malformed") from exc
     if any(len(row) != 3 for row in rows) or len({row[0] for row in rows}) != len(rows):
@@ -966,6 +1135,19 @@ def _validate_recorded_wheel_members(
         if row[1:] != [f"sha256={digest}", str(len(payload))]:
             raise DeliveryError(f"DefenseClaw production wheel RECORD entry is inconsistent: {member_name}")
 
+    if require_complete:
+        files = {info.filename: info for info in archive.infolist() if not info.is_dir()}
+        if set(by_name) != set(files):
+            raise DeliveryError("DefenseClaw wheel RECORD inventory is incomplete or contains unexpected members")
+        if by_name.get(record_name, [None, None, None])[1:] != ["", ""]:
+            raise DeliveryError("DefenseClaw wheel RECORD entry for RECORD is inconsistent")
+        for member_name, member_info in files.items():
+            if member_name == record_name:
+                continue
+            digest, size = _wheel_member_sha256(archive, member_info)
+            if by_name[member_name][1:] != [f"sha256={digest}", str(size)]:
+                raise DeliveryError(f"DefenseClaw production wheel RECORD entry is inconsistent: {member_name}")
+
 
 def _validate_wheel_license_metadata(wheel: Path, *, version: str, core_terms: str) -> None:
     base_notice = regular_file(
@@ -976,18 +1158,16 @@ def _validate_wheel_license_metadata(wheel: Path, *, version: str, core_terms: s
     expected_payload = production_notice(base_notice, core_terms)
     try:
         with zipfile.ZipFile(wheel) as archive:
-            names = archive.namelist()
-            if len(names) != len(set(names)):
-                raise DeliveryError("wheel contains duplicate members")
-            metadata_names = [name for name in names if name.endswith(".dist-info/METADATA")]
-            if len(metadata_names) != 1:
+            infos = _validated_wheel_archive_members(archive)
+            names = [info.filename for info in infos]
+            expected_metadata_name = f"defenseclaw-{version}.dist-info/METADATA"
+            metadata_names = [name for name in names if name.casefold().endswith(".dist-info/metadata")]
+            if metadata_names != [expected_metadata_name]:
                 raise DeliveryError("DefenseClaw wheel must contain exactly one distribution metadata file")
-            metadata_name = metadata_names[0]
+            metadata_name = expected_metadata_name
             metadata_info = archive.getinfo(metadata_name)
-            metadata_mode = metadata_info.external_attr >> 16
             if (
-                metadata_info.is_dir()
-                or stat.S_ISLNK(metadata_mode)
+                not _wheel_member_is_regular(metadata_info)
                 or metadata_info.file_size <= 0
                 or metadata_info.file_size > MAX_JSON_BYTES
             ):
@@ -1002,9 +1182,19 @@ def _validate_wheel_license_metadata(wheel: Path, *, version: str, core_terms: s
             metadata = BytesParser(policy=policy.default).parsebytes(metadata_payload)
             if metadata.defects:
                 raise DeliveryError("DefenseClaw wheel distribution metadata is malformed")
-            if (metadata.get("Name") or "").strip().lower() != "defenseclaw":
+            distribution_name = _single_metadata_header(
+                metadata,
+                "Name",
+                message="DefenseClaw wheel distribution identity is invalid",
+            )
+            if distribution_name.lower() != "defenseclaw":
                 raise DeliveryError("DefenseClaw wheel distribution identity is invalid")
-            if (metadata.get("Version") or "").strip() != version:
+            distribution_version = _single_metadata_header(
+                metadata,
+                "Version",
+                message="DefenseClaw wheel distribution version is inconsistent",
+            )
+            if distribution_version != version:
                 raise DeliveryError("DefenseClaw wheel distribution version is inconsistent")
             if metadata.get_all("License"):
                 raise DeliveryError("DefenseClaw production wheel carries legacy License metadata")
@@ -1016,6 +1206,11 @@ def _validate_wheel_license_metadata(wheel: Path, *, version: str, core_terms: s
                 raise DeliveryError("DefenseClaw production wheel license file headers are inconsistent")
 
             dist_info = PurePosixPath(metadata_name).parent
+            operational_metadata = _validated_operational_wheel_metadata(
+                archive,
+                names=names,
+                dist_info=dist_info,
+            )
             license_member = f"{dist_info.as_posix()}/licenses/LICENSE"
             license_name = f"{dist_info.as_posix()}/licenses/NOTICE"
             if names.count(license_member) != 1 or names.count(license_name) != 1:
@@ -1026,21 +1221,14 @@ def _validate_wheel_license_metadata(wheel: Path, *, version: str, core_terms: s
                 max_bytes=MAX_SOURCE_LICENSE_BYTES,
             )
             license_file_info = archive.getinfo(license_member)
-            license_file_mode = license_file_info.external_attr >> 16
-            if (
-                license_file_info.is_dir()
-                or stat.S_ISLNK(license_file_mode)
-                or license_file_info.file_size != len(source_license)
-            ):
+            if not _wheel_member_is_regular(license_file_info) or license_file_info.file_size != len(source_license):
                 raise DeliveryError("DefenseClaw production wheel LICENSE file is unsafe")
             license_payload = archive.read(license_file_info)
             if license_payload != source_license:
                 raise DeliveryError("DefenseClaw production wheel LICENSE differs from the source LICENSE")
             license_info = archive.getinfo(license_name)
-            license_mode = license_info.external_attr >> 16
             if (
-                license_info.is_dir()
-                or stat.S_ISLNK(license_mode)
+                not _wheel_member_is_regular(license_info)
                 or license_info.file_size <= 0
                 or license_info.file_size > MAX_WHEEL_NOTICE_BYTES
             ):
@@ -1057,10 +1245,159 @@ def _validate_wheel_license_metadata(wheel: Path, *, version: str, core_terms: s
                     metadata_name: metadata_payload,
                     license_member: license_payload,
                     license_name: payload,
+                    **operational_metadata,
                 },
+                require_complete=True,
             )
     except (OSError, zipfile.BadZipFile, KeyError) as exc:
         raise DeliveryError(f"could not validate DefenseClaw wheel licensing: {exc}") from exc
+
+
+def validate_source_only_wheel(wheel: Path, *, version: str) -> dict[str, Any]:
+    wheel = wheel.resolve(strict=True)
+    prefix = "defenseclaw/_data/sgw/"
+    expected_sgw = {f"{prefix}{name}" for name in (*BASE_ASSETS, RUNTIME_ASSET_NAME)}
+    source_license = regular_file(
+        ROOT / "LICENSE",
+        label="source LICENSE",
+        max_bytes=MAX_SOURCE_LICENSE_BYTES,
+    )
+    source_notice = regular_file(
+        ROOT / "NOTICE",
+        label="source NOTICE",
+        max_bytes=MAX_SOURCE_LICENSE_BYTES,
+    )
+    expected_payloads = {
+        f"{prefix}sgw_module.py": regular_file(
+            ROOT / BASE_ASSETS["sgw_module.py"],
+            label="source s-gw runtime driver",
+            max_bytes=MAX_DRIVER_BYTES,
+        ),
+        f"{prefix}s-gw-module.json": regular_file(
+            ROOT / BASE_ASSETS["s-gw-module.json"],
+            label="source s-gw module manifest",
+            max_bytes=MAX_JSON_BYTES,
+        ),
+        f"{prefix}{RUNTIME_ASSET_NAME}": sanitized_runtime_manifest(
+            regular_file(
+                ROOT / "release" / RUNTIME_ASSET_NAME,
+                label="source s-gw runtime manifest",
+                max_bytes=MAX_JSON_BYTES,
+            )
+        ),
+    }
+
+    try:
+        with zipfile.ZipFile(wheel) as archive:
+            infos = _validated_wheel_archive_members(archive)
+            names = [info.filename for info in infos]
+            observed_sgw = {
+                name
+                for name in names
+                if [part.casefold() for part in name.split("/")[:3]] == ["defenseclaw", "_data", "sgw"]
+            }
+            if observed_sgw != expected_sgw:
+                missing = sorted(expected_sgw - observed_sgw)
+                unexpected = sorted(observed_sgw - expected_sgw)
+                raise DeliveryError(
+                    f"source-only wheel s-gw inventory mismatch: missing={missing}, unexpected={unexpected}"
+                )
+
+            recorded: dict[str, bytes] = {}
+            for name, expected in expected_payloads.items():
+                info = archive.getinfo(name)
+                if (
+                    not _wheel_member_is_regular(info)
+                    or info.file_size <= 0
+                    or info.file_size > max(MAX_DRIVER_BYTES, MAX_JSON_BYTES)
+                ):
+                    raise DeliveryError(f"source-only wheel contains an unsafe s-gw member: {name}")
+                payload = archive.read(info)
+                if len(payload) != info.file_size or payload != expected:
+                    raise DeliveryError(f"source-only wheel s-gw member differs from reviewed source: {name}")
+                recorded[name] = payload
+
+            expected_metadata_name = f"defenseclaw-{version}.dist-info/METADATA"
+            metadata_names = [name for name in names if name.casefold().endswith(".dist-info/metadata")]
+            if metadata_names != [expected_metadata_name]:
+                raise DeliveryError("DefenseClaw wheel must contain exactly one distribution metadata file")
+            metadata_name = expected_metadata_name
+            metadata_info = archive.getinfo(metadata_name)
+            if (
+                not _wheel_member_is_regular(metadata_info)
+                or metadata_info.file_size <= 0
+                or metadata_info.file_size > MAX_JSON_BYTES
+            ):
+                raise DeliveryError("DefenseClaw wheel distribution metadata is unsafe")
+            metadata_payload = archive.read(metadata_info)
+            if (
+                len(metadata_payload) != metadata_info.file_size
+                or b"\r" in metadata_payload
+                or b"\0" in metadata_payload
+            ):
+                raise DeliveryError("DefenseClaw wheel distribution metadata is not canonical LF text")
+            metadata = BytesParser(policy=policy.default).parsebytes(metadata_payload)
+            if metadata.defects:
+                raise DeliveryError("DefenseClaw wheel distribution metadata is malformed")
+            distribution_name = _single_metadata_header(
+                metadata,
+                "Name",
+                message="DefenseClaw wheel distribution identity is invalid",
+            )
+            if distribution_name.lower() != "defenseclaw":
+                raise DeliveryError("DefenseClaw wheel distribution identity is invalid")
+            distribution_version = _single_metadata_header(
+                metadata,
+                "Version",
+                message="DefenseClaw wheel distribution version is inconsistent",
+            )
+            if distribution_version != version:
+                raise DeliveryError("DefenseClaw wheel distribution version is inconsistent")
+            if metadata.get_all("License"):
+                raise DeliveryError("DefenseClaw source-only wheel carries legacy License metadata")
+            if metadata.get_all("License-Expression", []) != ["Apache-2.0"]:
+                raise DeliveryError("DefenseClaw source-only wheel license expression is inconsistent")
+            if sorted(metadata.get_all("License-File", [])) != ["LICENSE", "NOTICE"]:
+                raise DeliveryError("DefenseClaw source-only wheel license file headers are inconsistent")
+
+            dist_info = PurePosixPath(metadata_name).parent
+            recorded.update(
+                _validated_operational_wheel_metadata(
+                    archive,
+                    names=names,
+                    dist_info=dist_info,
+                )
+            )
+            license_name = f"{dist_info.as_posix()}/licenses/LICENSE"
+            notice_name = f"{dist_info.as_posix()}/licenses/NOTICE"
+            if names.count(license_name) != 1 or names.count(notice_name) != 1:
+                raise DeliveryError("DefenseClaw source-only wheel lacks its exact license files")
+            for name, expected in ((license_name, source_license), (notice_name, source_notice)):
+                info = archive.getinfo(name)
+                if not _wheel_member_is_regular(info) or info.file_size != len(expected):
+                    raise DeliveryError(f"DefenseClaw source-only wheel {PurePosixPath(name).name} file is unsafe")
+                payload = archive.read(info)
+                if len(payload) != info.file_size or payload != expected:
+                    raise DeliveryError(
+                        f"DefenseClaw source-only wheel {PurePosixPath(name).name} differs from the source"
+                    )
+                recorded[name] = payload
+            recorded[metadata_name] = metadata_payload
+            _validate_recorded_wheel_members(
+                archive,
+                dist_info=dist_info,
+                members=recorded,
+                require_complete=True,
+            )
+    except (OSError, NotImplementedError, zipfile.BadZipFile, KeyError) as exc:
+        raise DeliveryError(f"could not validate DefenseClaw source-only wheel: {exc}") from exc
+
+    return {
+        "schema_version": 1,
+        "wheel": os.fspath(wheel),
+        "version": version,
+        "production_modules": False,
+    }
 
 
 def _copy_sgw_wheel_inputs(wheel: Path, destination: Path) -> tuple[Path, bytes, bytes]:
@@ -1077,15 +1414,20 @@ def _copy_sgw_wheel_inputs(wheel: Path, destination: Path) -> tuple[Path, bytes,
     destination.mkdir(mode=0o700)
     try:
         with zipfile.ZipFile(wheel) as archive:
-            if len(archive.namelist()) != len(set(archive.namelist())):
-                raise DeliveryError("wheel contains duplicate members")
-            observed = {name for name in archive.namelist() if name.startswith(prefix)}
+            infos = _validated_wheel_archive_members(archive)
+            observed = {
+                info.filename
+                for info in infos
+                if [part.casefold() for part in info.filename.split("/")[:3]] == ["defenseclaw", "_data", "sgw"]
+            }
             if observed != expected:
                 raise DeliveryError("wheel s-gw inventory is incomplete or contains unexpected members")
             module_name = f"{prefix}s-gw-module.json"
             runtime_name = f"{prefix}{RUNTIME_ASSET_NAME}"
             for name in (module_name, runtime_name, f"{prefix}checksums.txt"):
                 info = archive.getinfo(name)
+                if not _wheel_member_is_regular(info):
+                    raise DeliveryError(f"wheel contains an unsafe s-gw member: {name}")
                 output = destination / PurePosixPath(name).name
                 copy_zip_member(archive, info, output, max_bytes=MAX_JSON_BYTES)
             modules = destination / "modules"
@@ -1093,6 +1435,8 @@ def _copy_sgw_wheel_inputs(wheel: Path, destination: Path) -> tuple[Path, bytes,
             for target in TARGETS:
                 name = f"{prefix}modules/{target}/s-gw-module.tar.gz"
                 info = archive.getinfo(name)
+                if not _wheel_member_is_regular(info):
+                    raise DeliveryError(f"wheel contains an unsafe s-gw member: {name}")
                 target_dir = modules / target
                 target_dir.mkdir()
                 copy_zip_member(
@@ -1102,9 +1446,12 @@ def _copy_sgw_wheel_inputs(wheel: Path, destination: Path) -> tuple[Path, bytes,
                     max_bytes=MAX_ARTIFACT_BYTES,
                 )
                 checksum_name = f"{name}.sha256"
+                checksum_info = archive.getinfo(checksum_name)
+                if not _wheel_member_is_regular(checksum_info):
+                    raise DeliveryError(f"wheel contains an unsafe s-gw member: {checksum_name}")
                 copy_zip_member(
                     archive,
-                    archive.getinfo(checksum_name),
+                    checksum_info,
                     target_dir / "s-gw-module.tar.gz.sha256",
                     max_bytes=1024,
                 )

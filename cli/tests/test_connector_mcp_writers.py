@@ -197,7 +197,8 @@ class TestClaudeCodeWrites:
     @pytest.mark.skipif(os.name != "nt", reason="Windows MAX_PATH publication contract")
     def test_windows_private_metadata_uses_compact_staging_name(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
-        settings = tmp_path / ".claude" / "settings.json"
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        settings = tmp_path / ".claude.json"
 
         # Choose a data-home length that leaves the durable metadata name
         # valid while the historical basename-repeating candidate exceeds
@@ -207,10 +208,7 @@ class TestClaudeCodeWrites:
         short_metadata = connector_paths._claude_mcp_ownership_path(str(settings))
         short_legacy_candidate = os.path.join(
             os.path.dirname(short_metadata),
-            (
-                f".{os.path.basename(short_metadata)}"
-                f".observability-v8-candidate-{'0' * 32}.tmp"
-            ),
+            (f".{os.path.basename(short_metadata)}.observability-v8-candidate-{'0' * 32}.tmp"),
         )
         padding = max(1, 270 - len(short_legacy_candidate))
         data_home = tmp_path / ("d" * padding)
@@ -218,10 +216,7 @@ class TestClaudeCodeWrites:
         metadata = Path(connector_paths._claude_mcp_ownership_path(str(settings)))
         legacy_candidate = os.path.join(
             str(metadata.parent),
-            (
-                f".{metadata.name}"
-                f".observability-v8-candidate-{'0' * 32}.tmp"
-            ),
+            (f".{metadata.name}.observability-v8-candidate-{'0' * 32}.tmp"),
         )
         assert len(legacy_candidate) >= 260
         assert len(str(metadata)) < 260
@@ -1417,7 +1412,10 @@ class TestClaudeCodeWrites:
     def test_absent_settings_parent_swap_fails_closed(self, tmp_path, monkeypatch):
         home = tmp_path / "home"
         monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
         monkeypatch.setenv("DEFENSECLAW_HOME", str(tmp_path / "d"))
+        if home.exists():
+            home.rmdir()
         settings = home / ".claude.json"
         displaced = tmp_path / "home-displaced"
         marker = b"operator tree"

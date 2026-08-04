@@ -187,6 +187,13 @@ def git_blob_oid(value: bytes) -> str:
     return hashlib.sha1(payload, usedforsecurity=False).hexdigest()  # noqa: S324 - Git object identity is SHA-1.
 
 
+def checkout_mode(path: Path, *, platform_name: str | None = None) -> int | None:
+    """Return a meaningful POSIX checkout mode when the host exposes one."""
+    if (platform_name or os.name) == "nt":
+        return None
+    return path.stat().st_mode & 0o777
+
+
 def source_record(path: str, mode: str, object_id: str, value: bytes) -> dict[str, object]:
     return {
         "git_blob": object_id,
@@ -359,9 +366,9 @@ def verify() -> int:
             raise VendorError(f"vendored s-gw digest mismatch: {relative}")
         if git_blob_oid(value) != record["git_blob"]:
             raise VendorError(f"vendored s-gw Git blob identity mismatch: {relative}")
-        actual_mode = item.stat().st_mode & 0o777
+        actual_mode = checkout_mode(item)
         expected_mode = ALLOWED_GIT_MODES[str(record["mode"])]
-        if actual_mode != expected_mode:
+        if actual_mode is not None and actual_mode != expected_mode:
             raise VendorError(f"vendored s-gw mode mismatch: {relative} is {actual_mode:o}, expected {expected_mode:o}")
         found.add(relative)
     missing = sorted(set(expected).difference(found))

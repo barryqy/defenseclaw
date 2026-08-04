@@ -122,28 +122,37 @@ foreach ($item in $items) {
         throw "managed path is a reparse point"
     }
     $isDirectory = [bool]$item.PSIsContainer
+    $observed = Get-Acl -LiteralPath $item.FullName -ErrorAction Stop
+    $expectedInheritance = if ($isDirectory) {
+        [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
+            [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    } else {
+        [System.Security.AccessControl.InheritanceFlags]::None
+    }
     if ($operation -eq "apply") {
-        if ($isDirectory) {
-            $acl = [System.Security.AccessControl.DirectorySecurity]::new()
-            $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
-                [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+        $replacement = if ($isDirectory) {
+            [System.Security.AccessControl.DirectorySecurity]::new()
         } else {
-            $acl = [System.Security.AccessControl.FileSecurity]::new()
-            $inheritance = [System.Security.AccessControl.InheritanceFlags]::None
+            [System.Security.AccessControl.FileSecurity]::new()
         }
-        $acl.SetOwner($currentSid)
-        $acl.SetAccessRuleProtection($true, $false)
-        foreach ($sid in @($currentSid, $systemSid)) {
+        $replacement.SetOwner($currentSid)
+        $replacement.SetAccessRuleProtection($true, $false)
+        foreach ($sidValue in $wantedSids) {
+            $sid = [System.Security.Principal.SecurityIdentifier]::new($sidValue)
             $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
                 $sid,
                 [System.Security.AccessControl.FileSystemRights]::FullControl,
-                $inheritance,
+                $expectedInheritance,
                 [System.Security.AccessControl.PropagationFlags]::None,
                 [System.Security.AccessControl.AccessControlType]::Allow
             )
-            [void]$acl.AddAccessRule($rule)
+            [void]$replacement.AddAccessRule($rule)
         }
-        Set-Acl -LiteralPath $item.FullName -AclObject $acl -ErrorAction Stop
+        $sections = [System.Security.AccessControl.AccessControlSections]::Owner -bor `
+            [System.Security.AccessControl.AccessControlSections]::Access
+        $replacementSddl = $replacement.GetSecurityDescriptorSddlForm($sections)
+        $observed.SetSecurityDescriptorSddlForm($replacementSddl, $sections)
+        $item.SetAccessControl($observed)
     } elseif ($operation -ne "verify") {
         throw "invalid ACL operation"
     }
@@ -153,31 +162,31 @@ foreach ($item in $items) {
     if ($observed.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $currentSid.Value) {
         throw "managed ACL owner mismatch"
     }
-    $rules = @($observed.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))
-    if ($rules.Count -ne $wantedSids.Count) { throw "managed ACL has unexpected rules" }
-    $seen = @{}
+    $rules = @($observed.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+    $rights = @{}
     foreach ($rule in $rules) {
         $sid = $rule.IdentityReference.Value
-        if ($wantedSids -notcontains $sid -or $seen.ContainsKey($sid)) {
+        if ($rule.IsInherited) { throw "managed ACL inherits an access rule" }
+        if ($wantedSids -notcontains $sid) {
             throw "managed ACL grants an unexpected identity"
         }
-        $seen[$sid] = $true
         if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) {
             throw "managed ACL contains a deny rule"
-        }
-        if (($rule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne `
-            [System.Security.AccessControl.FileSystemRights]::FullControl) {
-            throw "managed ACL lacks full control"
-        }
-        $expectedInheritance = if ($isDirectory) {
-            [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
-                [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-        } else {
-            [System.Security.AccessControl.InheritanceFlags]::None
         }
         if ($rule.InheritanceFlags -ne $expectedInheritance -or
             $rule.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None) {
             throw "managed ACL has unexpected inheritance"
+        }
+        if (-not $rights.ContainsKey($sid)) {
+            $rights[$sid] = [System.Security.AccessControl.FileSystemRights]0
+        }
+        $rights[$sid] = $rights[$sid] -bor $rule.FileSystemRights
+    }
+    foreach ($sid in $wantedSids) {
+        if (-not $rights.ContainsKey($sid) -or
+            ($rights[$sid] -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne `
+                [System.Security.AccessControl.FileSystemRights]::FullControl) {
+            throw "managed ACL lacks full control"
         }
     }
 }

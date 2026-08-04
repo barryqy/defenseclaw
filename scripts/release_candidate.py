@@ -955,7 +955,7 @@ def sgw_sbom_asset_name(version: str) -> str | None:
     return f"{wheel}.sbom.json"
 
 
-def runtime_asset_names(version: str) -> tuple[str, ...]:
+def runtime_asset_names(version: str, *, source_only_sgw: bool = False) -> tuple[str, ...]:
     _validate_version(version)
     canonical_archives = (
         f"defenseclaw_{version}_darwin_amd64.tar.gz",
@@ -981,7 +981,7 @@ def runtime_asset_names(version: str) -> tuple[str, ...]:
             *canonical_archives,
             f"defenseclaw-{version}-py3-none-any.whl",
         )
-    sgw_sbom = sgw_sbom_asset_name(version)
+    sgw_sbom = None if source_only_sgw else sgw_sbom_asset_name(version)
     return tuple(
         sorted(
             (
@@ -3754,15 +3754,29 @@ def _validate_legacy_refusal_envelopes(directory: Path, version: str) -> None:
         raise CandidateError("legacy wheel refusal envelope is installable")
 
 
-def _validate_sgw_runtime_sbom(directory: Path, version: str, *, canonical_wheel: bool = False) -> None:
+def _validate_sgw_runtime_sbom(
+    directory: Path,
+    version: str,
+    *,
+    canonical_wheel: bool = False,
+    source_only_sgw: bool = False,
+) -> None:
     sbom_name = sgw_sbom_asset_name(version)
-    if sbom_name is None:
+    if sbom_name is None and not source_only_sgw:
         return
     artifacts = _expected_release_artifacts(version)
-    sbom_path = directory / (f"defenseclaw-{version}-py3-none-any.whl.sbom.json" if canonical_wheel else sbom_name)
+    canonical_sbom_name = f"defenseclaw-{version}-py3-none-any.whl.sbom.json"
+    sbom_path = directory / (canonical_sbom_name if canonical_wheel else str(sbom_name))
     wheel_path = directory / (f"defenseclaw-{version}-py3-none-any.whl" if canonical_wheel else artifacts["wheel"])
     temporary: Path | None = None
     try:
+        if source_only_sgw:
+            for name in (canonical_sbom_name, sbom_name):
+                if name is None:
+                    continue
+                candidate = directory / name
+                if candidate.exists() or candidate.is_symlink():
+                    raise CandidateError(f"source-only s-gw runtime profile forbids {name}")
         if canonical_wheel:
             plain_wheel = wheel_path
         else:
@@ -3774,20 +3788,26 @@ def _validate_sgw_runtime_sbom(directory: Path, version: str, *, canonical_wheel
                 output.flush()
                 os.fsync(output.fileno())
             plain_wheel = temporary
-        stage_sgw_modules.validate_sgw_sbom(
-            plain_wheel,
-            sbom_path,
-            version=version,
-            authenticate=False,
-        )
+        if source_only_sgw:
+            stage_sgw_modules.validate_source_only_wheel(plain_wheel, version=version)
+        else:
+            stage_sgw_modules.validate_sgw_sbom(
+                plain_wheel,
+                sbom_path,
+                version=version,
+                authenticate=False,
+            )
+    except CandidateError:
+        raise
     except (OSError, ValueError, stage_sgw_modules.DeliveryError) as exc:
-        raise CandidateError(f"s-gw runtime SBOM is invalid: {exc}") from exc
+        label = "source-only s-gw runtime profile" if source_only_sgw else "s-gw runtime SBOM"
+        raise CandidateError(f"{label} is invalid: {exc}") from exc
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
 
 
-def prepare_runtime(directory: Path, version: str) -> None:
+def prepare_runtime(directory: Path, version: str, *, source_only_sgw: bool = False) -> None:
     """Replace canonical modern artifacts with deterministic refusal envelopes."""
 
     _validate_version(version)
@@ -3795,7 +3815,12 @@ def prepare_runtime(directory: Path, version: str) -> None:
         raise CandidateError("protected runtime preparation requires a schema-2 release")
     _validate_upgrade_manifest(directory / "upgrade-manifest.json", version)
     protected = _expected_release_artifacts(version)
-    _validate_sgw_runtime_sbom(directory, version, canonical_wheel=True)
+    _validate_sgw_runtime_sbom(
+        directory,
+        version,
+        canonical_wheel=True,
+        source_only_sgw=source_only_sgw,
+    )
 
     payload_moves: list[tuple[Path, Path]] = []
     metadata_moves: list[tuple[Path, Path]] = []
@@ -3814,7 +3839,7 @@ def prepare_runtime(directory: Path, version: str) -> None:
     canonical_wheel = directory / f"defenseclaw-{version}-py3-none-any.whl"
     protected_wheel = directory / protected["wheel"]
     payload_moves.append((canonical_wheel, protected_wheel))
-    if sgw_sbom_asset_name(version):
+    if sgw_sbom_asset_name(version) and not source_only_sgw:
         metadata_moves.append(
             (
                 directory / f"{canonical_wheel.name}.sbom.json",
@@ -3840,25 +3865,29 @@ def prepare_runtime(directory: Path, version: str) -> None:
         (directory / f"defenseclaw_{version}_windows_{arch}.zip").write_bytes(plain_payload)
     canonical_wheel.write_bytes(plain_payload)
     _validate_legacy_refusal_envelopes(directory, version)
-    checksum_lines = [f"{_sha256(directory / name)}  {name}" for name in runtime_asset_names(version)]
+    checksum_lines = [
+        f"{_sha256(directory / name)}  {name}" for name in runtime_asset_names(version, source_only_sgw=source_only_sgw)
+    ]
     (directory / RUNTIME_ATTESTATION_FILENAME).write_text(
         "\n".join(checksum_lines) + "\n",
         encoding="utf-8",
     )
 
 
-def verify_runtime(directory: Path, version: str) -> None:
-    names = runtime_asset_names(version)
+def verify_runtime(directory: Path, version: str, *, source_only_sgw: bool = False) -> None:
+    names = runtime_asset_names(version, source_only_sgw=source_only_sgw)
     _require_regular_files(directory, names, "runtime artifact")
     _validate_upgrade_manifest(directory / "upgrade-manifest.json", version)
     artifacts = _expected_release_artifacts(version)
     _validate_wheel(directory / artifacts["wheel"], version)
-    _validate_sgw_runtime_sbom(directory, version)
+    _validate_sgw_runtime_sbom(directory, version, source_only_sgw=source_only_sgw)
     _validate_gateway_archives(directory, version)
     if tuple(map(int, version.split("."))) >= (0, 8, 4):
         _validate_legacy_refusal_envelopes(directory, version)
         runtime_checksums = _parse_checksums(directory / RUNTIME_ATTESTATION_FILENAME)
-        expected_runtime_checksums = {name: _sha256(directory / name) for name in runtime_asset_names(version)}
+        expected_runtime_checksums = {
+            name: _sha256(directory / name) for name in runtime_asset_names(version, source_only_sgw=source_only_sgw)
+        }
         if runtime_checksums != expected_runtime_checksums:
             raise CandidateError("runtime checksums do not cover the exact protected candidate")
     for name in names:
@@ -5695,10 +5724,12 @@ def _parser() -> argparse.ArgumentParser:
     verify_runtime_parser = subparsers.add_parser("verify-runtime")
     verify_runtime_parser.add_argument("--release-dir", type=Path, required=True)
     verify_runtime_parser.add_argument("--version", required=True)
+    verify_runtime_parser.add_argument("--source-only-sgw", action="store_true")
 
     prepare_runtime_parser = subparsers.add_parser("prepare-runtime")
     prepare_runtime_parser.add_argument("--release-dir", type=Path, required=True)
     prepare_runtime_parser.add_argument("--version", required=True)
+    prepare_runtime_parser.add_argument("--source-only-sgw", action="store_true")
 
     stage_runtime_parser = subparsers.add_parser("stage-runtime")
     stage_runtime_parser.add_argument("--release-dir", type=Path, required=True)
@@ -5795,10 +5826,10 @@ def main(argv: list[str] | None = None) -> int:
                 f"release progression verified: target={args.target} reviewed_max={reviewed} published_max={published}"
             )
         elif args.command == "verify-runtime":
-            verify_runtime(args.release_dir, args.version)
+            verify_runtime(args.release_dir, args.version, source_only_sgw=args.source_only_sgw)
             print(f"runtime candidate verified: {args.version}")
         elif args.command == "prepare-runtime":
-            prepare_runtime(args.release_dir, args.version)
+            prepare_runtime(args.release_dir, args.version, source_only_sgw=args.source_only_sgw)
             print(f"protected runtime artifacts prepared: {args.version}")
         elif args.command == "stage-runtime":
             stage_runtime(args.release_dir, args.output_dir, args.version)

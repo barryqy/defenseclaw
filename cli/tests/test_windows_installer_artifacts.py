@@ -395,6 +395,8 @@ def _fixture(tmp_path: Path) -> argparse.Namespace:
                 license_expression=artifacts.SGW_MIXED_LICENSE,
                 license_files=("LICENSE", "NOTICE"),
             ),
+            f"{defense_metadata}/WHEEL": artifacts.stage_sgw_modules.EXPECTED_WHEEL_METADATA,
+            f"{defense_metadata}/entry_points.txt": artifacts.stage_sgw_modules.EXPECTED_ENTRY_POINTS,
             f"{defense_metadata}/licenses/LICENSE": SOURCE_LICENSE,
             f"{defense_metadata}/licenses/NOTICE": artifacts.stage_sgw_modules.production_notice(
                 SOURCE_NOTICE, SGW_CORE_TERMS

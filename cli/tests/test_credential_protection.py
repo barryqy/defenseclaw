@@ -45,6 +45,7 @@ from defenseclaw.credential_protection import (
     _privileged_gateway_binary,
     _registered_mcp_environment,
     _sgw_environment,
+    _trusted_execution_environment,
     credential_protection_default_enabled,
     has_sgw_mcp_registrations,
     install_module,
@@ -1026,7 +1027,11 @@ def test_registered_mcp_environment_pins_control_environment(monkeypatch):
     assert env["DEFENSECLAW_MCP_OWNER"] == "s-gw-credential-protection-v1"
     assert env["SGW_HOME"] == str(Path.home() / ".s-gw")
     assert env["SGW_RECOVERY_HOME"] == str(Path.home() / ".s-gw-recovery")
-    assert env["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin"
+    if os.name == "nt":
+        trusted = _trusted_execution_environment()
+        assert {key: env[key] for key in trusted} == trusted
+    else:
+        assert env["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin"
     assert all(env[key] == "" for key in hostile if key not in {"PATH", "SGW_HOME", "SGW_RECOVERY_HOME"})
 
 
@@ -1238,6 +1243,7 @@ def test_reconcile_uses_exact_driver_mcp_command_and_preserves_other_entries(tmp
         os.environ,
         {
             "HOME": str(home),
+            "USERPROFILE": str(home),
             "CODEX_HOME": str(codex_home),
             "DEFENSECLAW_HOME": cfg.data_dir,
         },
@@ -1449,7 +1455,12 @@ def test_bound_repair_updates_generation_and_node_path(tmp_path):
     document = json.loads((workspace / ".mcp.json").read_text(encoding="utf-8"))
     installed = document["mcpServers"]["s-gw"]
     assert installed["command"] == "/opt/node-v2"
-    assert "g2/package/dist/mcp-server.js" in installed["args"][0]
+    assert Path(installed["args"][0]).parts[-4:] == (
+        "0.2.0-test-linux-x64-g2",
+        "package",
+        "dist",
+        "mcp-server.js",
+    )
     journal = json.loads((data_dir / "credential-protection" / "mcp-registrations.json").read_text(encoding="utf-8"))
     assert journal["registrations"][0]["entry"] == installed
 
@@ -1877,6 +1888,7 @@ def test_enabled_roster_reconcile_replaces_batch_transactionally(tmp_path):
     cfg.credential_protection = SimpleNamespace(enabled=True)
     env = {
         "HOME": str(home),
+        "USERPROFILE": str(home),
         "CODEX_HOME": str(home / ".codex"),
         "DEFENSECLAW_HOME": str(data_dir),
     }
@@ -1929,6 +1941,7 @@ def test_enabled_roster_reconcile_restores_cleanup_when_active_conflicts(tmp_pat
     cfg.credential_protection = SimpleNamespace(enabled=True)
     env = {
         "HOME": str(home),
+        "USERPROFILE": str(home),
         "CODEX_HOME": str(home / ".codex"),
         "DEFENSECLAW_HOME": str(data_dir),
     }
