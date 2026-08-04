@@ -332,7 +332,7 @@ def _update_wheel_metadata(metadata_path: Path, contract: dict, *, allow_update:
         raise RuntimeError("wheel distribution metadata is not canonical LF or CRLF text")
     if b"\r" in source_payload:
         unpaired_newlines = source_payload.replace(b"\r\n", b"")
-        if b"\r" in unpaired_newlines or b"\n" in unpaired_newlines:
+        if b"\r" in unpaired_newlines:
             raise RuntimeError("wheel distribution metadata is not canonical LF or CRLF text")
         payload = source_payload.replace(b"\r\n", b"\n")
     else:

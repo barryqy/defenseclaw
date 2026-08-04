@@ -206,18 +206,40 @@ def test_wheel_metadata_normalizes_canonical_crlf(
     "payload",
     [
         pytest.param(
+            _wheel_metadata_payload(b"\r\n").replace(b"\r\n", b"\n", 1),
+            id="leading-lf",
+        ),
+        pytest.param(
+            _wheel_metadata_payload().replace(b"\n", b"\r\n", 1),
+            id="leading-crlf",
+        ),
+    ],
+)
+def test_wheel_metadata_normalizes_mixed_lf_and_crlf(
+    build_hook_module: ModuleType,
+    tmp_path: Path,
+    payload: bytes,
+) -> None:
+    metadata_path = tmp_path / "METADATA"
+    metadata_path.write_bytes(payload)
+    contract = {
+        "production_modules": False,
+        "license_expression": build_hook_module.BASE_LICENSE_EXPRESSION,
+    }
+
+    build_hook_module._update_wheel_metadata(metadata_path, contract, allow_update=False)
+
+    assert metadata_path.read_bytes() == _wheel_metadata_payload()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(
             _wheel_metadata_payload().replace(b"Name: ", b"Name: \0", 1),
             id="nul",
         ),
         pytest.param(_wheel_metadata_payload(b"\r"), id="bare-cr"),
-        pytest.param(
-            _wheel_metadata_payload(b"\r\n").replace(b"\r\n", b"\n", 1),
-            id="mixed-leading-lf",
-        ),
-        pytest.param(
-            _wheel_metadata_payload().replace(b"\n", b"\r\n", 1),
-            id="mixed-leading-crlf",
-        ),
     ],
 )
 def test_wheel_metadata_rejects_noncanonical_newlines(
