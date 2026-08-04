@@ -51,6 +51,7 @@ def build_hook_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location("defenseclaw_build_setup", ROOT / "setup.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    setup_source = (ROOT / "setup.py").read_text(encoding="utf-8").replace(r"\r\n", r"\n")
     setuptools_module = ModuleType("setuptools")
     setuptools_module.setup = lambda **_kwargs: None  # type: ignore[attr-defined]
     command_module = ModuleType("setuptools.command")
@@ -73,7 +74,8 @@ def build_hook_module() -> ModuleType:
             "setuptools.command.editable_wheel": editable_wheel_module,
         },
     ):
-        spec.loader.exec_module(module)
+        # Match setuptools build_meta's preprocessing before setup.py is executed.
+        exec(compile(setup_source, str(ROOT / "setup.py"), "exec"), module.__dict__)
     return module
 
 
