@@ -54,7 +54,7 @@ def _ready_credential_broker(monkeypatch):
     monkeypatch.setattr(
         bootstrap,
         "_setup_credential_protection_structured",
-        lambda _cfg: StepResult("Credential broker", "pass", "s-gw fixture ready"),
+        lambda _cfg, **_kwargs: StepResult("Credential broker", "pass", "s-gw fixture ready"),
     )
     monkeypatch.setattr(
         bootstrap,
@@ -1882,10 +1882,11 @@ class TestInitEnableGuardrail(unittest.TestCase):
             cfg.guardrail.connectors = {"codex": PerConnectorGuardrailConfig()}
             return True
 
-        def setup_credentials(cfg, *, removed_connectors=()):
+        def setup_credentials(cfg, *, removed_connectors=(), already_enabled=None):
             events.append("credential-protection")
             self.assertEqual(cfg.active_connectors(), ["codex"])
             self.assertEqual(list(removed_connectors), [])
+            self.assertFalse(already_enabled)
             return StepResult("Credential broker", "pass", "s-gw ready")
 
         def start_gateway(_cfg, _logger, *, restart_if_running=False):
@@ -2037,6 +2038,47 @@ class TestInitEnableGuardrail(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("Not started because credential-protection setup did not complete", result.output)
         start_gateway.assert_not_called()
+        import yaml
+
+        with open(os.path.join(self.tmp_dir, "config.yaml"), encoding="utf-8") as stream:
+            persisted = yaml.safe_load(stream)
+        self.assertNotIn("credential_protection", persisted)
+
+    @patch("defenseclaw.commands.cmd_init._install_guardrail")
+    @patch("defenseclaw.commands.cmd_init._install_scanners")
+    @patch("defenseclaw.config.detect_environment", return_value="macos")
+    @patch("defenseclaw.config.default_data_path")
+    def test_classic_init_does_not_publish_manual_credential_registration(
+        self,
+        mock_path,
+        _mock_env,
+        _mock_scanners,
+        _mock_guardrail,
+    ):
+        mock_path.return_value = Path(self.tmp_dir)
+        manual = StepResult(
+            "Credential broker",
+            "warn",
+            "MCP zeptoclaw=manual",
+            "defenseclaw credential-protection status",
+        )
+        with (
+            patch(
+                "defenseclaw.bootstrap._setup_credential_protection_structured",
+                return_value=manual,
+            ),
+            patch("defenseclaw.commands.cmd_init._start_gateway") as start_gateway,
+        ):
+            result = self.runner.invoke(init_cmd, ["--skip-install"], obj=AppContext())
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("Not started because credential-protection setup did not complete", result.output)
+        start_gateway.assert_not_called()
+        import yaml
+
+        with open(os.path.join(self.tmp_dir, "config.yaml"), encoding="utf-8") as stream:
+            persisted = yaml.safe_load(stream)
+        self.assertNotIn("credential_protection", persisted)
 
 
 class TestInitStartsGateway(unittest.TestCase):
@@ -2983,6 +3025,106 @@ class TestMultiConnectorInit(unittest.TestCase):
         self.assertEqual(configured.active_connectors(), ["claudecode", "codex"])
         self.assertEqual(report.setup[-1], reconciled)
 
+    def test_deferred_credential_enable_save_failure_stays_disabled(self):
+        import yaml
+        from defenseclaw import config as cfg_mod
+        from defenseclaw.bootstrap import FirstRunReport
+        from defenseclaw.commands.cmd_init import _refresh_credential_protection_after_connector_activation
+
+        with patch.dict(os.environ, {"DEFENSECLAW_HOME": self.tmp_dir}):
+            cfg = cfg_mod.default_config()
+            cfg_mod.prepare_fresh_v8_config(cfg)
+            cfg.save()
+            report = FirstRunReport(
+                status="ready",
+                config_file=str(cfg_mod.config_path()),
+                data_dir=self.tmp_dir,
+                connector="codex",
+                profile="observe",
+                setup=[StepResult("Credential broker", "skip", "deferred")],
+                readiness=[StepResult("Credential broker", "skip", "disabled")],
+                credential_protection_deferred=True,
+            )
+            ready = StepResult("Credential broker", "pass", "full roster ready")
+            with (
+                patch("defenseclaw.config.load", return_value=cfg),
+                patch(
+                    "defenseclaw.bootstrap._setup_credential_protection_structured",
+                    return_value=ready,
+                ),
+                patch.object(cfg, "save", side_effect=OSError("injected save failure")),
+                patch("defenseclaw.bootstrap._credential_protection_readiness") as readiness,
+            ):
+                step = _refresh_credential_protection_after_connector_activation(
+                    report,
+                    enable_deferred=True,
+                )
+
+        self.assertIsNotNone(step)
+        assert step is not None
+        self.assertEqual(step.status, "fail")
+        self.assertIn("could not be saved", step.detail)
+        self.assertFalse(cfg.credential_protection.enabled)
+        self.assertEqual(report.status, "needs_attention")
+        self.assertEqual(report.setup[-1], step)
+        self.assertEqual(report.readiness[-1], step)
+        self.assertFalse(report.credential_protection_deferred)
+        readiness.assert_not_called()
+        with open(os.path.join(self.tmp_dir, "config.yaml"), encoding="utf-8") as stream:
+            persisted = yaml.safe_load(stream)
+        self.assertNotIn("credential_protection", persisted)
+
+    def test_deferred_manual_credential_registration_stays_disabled(self):
+        import yaml
+        from defenseclaw import config as cfg_mod
+        from defenseclaw.bootstrap import FirstRunReport
+        from defenseclaw.commands.cmd_init import _refresh_credential_protection_after_connector_activation
+
+        with patch.dict(os.environ, {"DEFENSECLAW_HOME": self.tmp_dir}):
+            cfg = cfg_mod.default_config()
+            cfg_mod.prepare_fresh_v8_config(cfg)
+            cfg.save()
+            report = FirstRunReport(
+                status="ready",
+                config_file=str(cfg_mod.config_path()),
+                data_dir=self.tmp_dir,
+                connector="zeptoclaw",
+                profile="observe",
+                setup=[StepResult("Credential broker", "skip", "deferred")],
+                readiness=[StepResult("Credential broker", "skip", "disabled")],
+                credential_protection_deferred=True,
+            )
+            manual = StepResult(
+                "Credential broker",
+                "warn",
+                "MCP zeptoclaw=manual",
+                "defenseclaw credential-protection status",
+            )
+            with (
+                patch("defenseclaw.config.load", return_value=cfg),
+                patch(
+                    "defenseclaw.bootstrap._setup_credential_protection_structured",
+                    return_value=manual,
+                ),
+                patch.object(cfg, "save") as save,
+                patch("defenseclaw.bootstrap._credential_protection_readiness") as readiness,
+            ):
+                step = _refresh_credential_protection_after_connector_activation(
+                    report,
+                    enable_deferred=True,
+                )
+
+        self.assertEqual(step, manual)
+        self.assertFalse(cfg.credential_protection.enabled)
+        self.assertEqual(report.status, "partial")
+        self.assertEqual(report.setup[-1], manual)
+        self.assertEqual(report.readiness[-1], manual)
+        save.assert_not_called()
+        readiness.assert_not_called()
+        with open(os.path.join(self.tmp_dir, "config.yaml"), encoding="utf-8") as stream:
+            persisted = yaml.safe_load(stream)
+        self.assertNotIn("credential_protection", persisted)
+
     def test_activate_additional_connectors_downgrades_unverified_action(self):
         """An extra connector requested in action mode whose installed version
         is not verified against a known hook contract must be downgraded to
@@ -3881,6 +4023,7 @@ class TestInitObserveAllActionConnectors(unittest.TestCase):
         # The stale "start the gateway" hint (from the deferred skip step) must
         # be recomputed away now that the gateway is actually running.
         self.assertNotIn("defenseclaw-gateway start", summary["next_commands"])
+        self.assertEqual(self._load_cfg()["credential_protection"], {"enabled": True})
 
     @patch("defenseclaw.bootstrap._start_gateway_structured")
     @patch("defenseclaw.commands.cmd_init.agent_discovery.discover_agents")
@@ -3890,19 +4033,16 @@ class TestInitObserveAllActionConnectors(unittest.TestCase):
         mock_start,
     ):
         mock_discover.return_value = self._disc({"codex", "claudecode"})
-        credential_steps = [
-            StepResult("Credential broker", "pass", "primary ready"),
-            StepResult(
-                "Credential broker",
-                "fail",
-                "MCP claudecode=failed, codex=unchanged",
-                "defenseclaw setup credential-protection --yes",
-            ),
-        ]
+        failed = StepResult(
+            "Credential broker",
+            "fail",
+            "MCP claudecode=failed, codex=unchanged",
+            "defenseclaw setup credential-protection --yes",
+        )
         with patch(
             "defenseclaw.bootstrap._setup_credential_protection_structured",
-            side_effect=credential_steps,
-        ):
+            return_value=failed,
+        ) as setup_credentials:
             result = self._invoke(
                 [
                     "--non-interactive",
@@ -3923,6 +4063,52 @@ class TestInitObserveAllActionConnectors(unittest.TestCase):
         sidecar = next(step for step in summary["setup"] if step["name"] == "Sidecar")
         self.assertEqual(sidecar["status"], "skip")
         self.assertIn("credential-protection setup did not complete", sidecar["detail"])
+        setup_credentials.assert_called_once()
+        configured = setup_credentials.call_args.args[0]
+        self.assertEqual(configured.active_connectors(), ["claudecode", "codex"])
+        self.assertFalse(setup_credentials.call_args.kwargs["already_enabled"])
+        self.assertNotIn("credential_protection", self._load_cfg())
+
+    @patch("defenseclaw.bootstrap._start_gateway_structured")
+    @patch("defenseclaw.commands.cmd_init.agent_discovery.discover_agents")
+    def test_deferred_gateway_waits_for_manual_credential_registration(
+        self,
+        mock_discover,
+        mock_start,
+    ):
+        mock_discover.return_value = self._disc({"codex", "zeptoclaw"})
+        manual = StepResult(
+            "Credential broker",
+            "warn",
+            "MCP codex=installed, zeptoclaw=manual",
+            "defenseclaw credential-protection status",
+        )
+        with patch(
+            "defenseclaw.bootstrap._setup_credential_protection_structured",
+            return_value=manual,
+        ):
+            result = self._invoke(
+                [
+                    "--non-interactive",
+                    "--yes",
+                    "--observe-all",
+                    "--start-gateway",
+                    "--scanner-mode",
+                    "local",
+                    "--skip-install",
+                    "--no-verify",
+                    "--json-summary",
+                ]
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output + (result.stderr or ""))
+        mock_start.assert_not_called()
+        summary = json.loads(result.output)
+        self.assertEqual(summary["status"], "partial")
+        sidecar = next(step for step in summary["setup"] if step["name"] == "Sidecar")
+        self.assertEqual(sidecar["status"], "skip")
+        self.assertIn("credential-protection setup did not complete", sidecar["detail"])
+        self.assertNotIn("credential_protection", self._load_cfg())
 
     @patch("defenseclaw.bootstrap._start_gateway_structured")
     @patch("defenseclaw.commands.cmd_init.agent_discovery.discover_agents")

@@ -332,6 +332,7 @@ def init_cmd(  # noqa: PLR0913 - first-run CLI mirrors the setup surface.
     cfg_file = config_path()
     is_new_config = not os.path.lexists(cfg_file)
     requested_credential_protection = credential_protection
+    new_credential_protection_requested = False
     if is_new_config:
         cfg = default_config()
         prepare_fresh_v8_config(cfg)
@@ -341,7 +342,8 @@ def init_cmd(  # noqa: PLR0913 - first-run CLI mirrors the setup surface.
             )
 
             credential_protection = credential_protection_default_enabled()
-        cfg.credential_protection.enabled = credential_protection
+        new_credential_protection_requested = bool(credential_protection)
+        cfg.credential_protection.enabled = False
         click.echo("  Config:        " + ux._style("created new defaults", fg="green"))
     else:
         cfg = load()
@@ -440,18 +442,31 @@ def init_cmd(  # noqa: PLR0913 - first-run CLI mirrors the setup surface.
     credential_step = None
     if is_new_config or cfg.credential_protection.enabled:
         ux.banner("Credential broker")
-        if cfg.credential_protection.enabled:
+        should_setup_credentials = (
+            new_credential_protection_requested if is_new_config else cfg.credential_protection.enabled
+        )
+        if should_setup_credentials:
             from defenseclaw.bootstrap import _setup_credential_protection_structured
 
+            if is_new_config:
+                cfg.credential_protection.enabled = True
             current_connectors = {str(name).strip().lower() for name in cfg.active_connectors() if str(name).strip()}
             removed_connectors = sorted(previous_connectors - current_connectors)
-            if removed_connectors:
+            if is_new_config:
+                credential_step = _setup_credential_protection_structured(
+                    cfg,
+                    removed_connectors=removed_connectors,
+                    already_enabled=False,
+                )
+            elif removed_connectors:
                 credential_step = _setup_credential_protection_structured(
                     cfg,
                     removed_connectors=removed_connectors,
                 )
             else:
                 credential_step = _setup_credential_protection_structured(cfg)
+            if is_new_config and credential_step.status != "pass":
+                cfg.credential_protection.enabled = False
             if credential_step.status == "fail":
                 ux.err(
                     f"{credential_step.detail}. Next: {credential_step.next_command}",
@@ -526,7 +541,10 @@ def init_cmd(  # noqa: PLR0913 - first-run CLI mirrors the setup surface.
                 )
 
     sidecar_started = False
-    credential_ready = credential_step is None or credential_step.status != "fail"
+    credential_incomplete = credential_step is not None and (
+        credential_step.status == "fail" or (is_new_config and credential_step.status != "pass")
+    )
+    credential_ready = not credential_incomplete
     if not sandbox and credential_ready:
         ux.banner("Sidecar")
         _start_gateway(
@@ -560,7 +578,7 @@ def init_cmd(  # noqa: PLR0913 - first-run CLI mirrors the setup surface.
     click.echo()
     click.echo("  " + ux.dim("─" * 54))
     click.echo()
-    if credential_step is not None and credential_step.status == "fail":
+    if credential_incomplete:
         ux.warn("DefenseClaw initialized, but the credential broker needs attention.")
     else:
         ux.ok("DefenseClaw initialized.", indent="  ")
@@ -577,12 +595,11 @@ def init_cmd(  # noqa: PLR0913 - first-run CLI mirrors the setup surface.
     click.echo(f"    {ux.accent('defenseclaw skill scan all')}   " + ux.dim("Scan installed agent skills"))
     click.echo(f"    {ux.accent('defenseclaw mcp scan --all')}   " + ux.dim("Scan configured MCP servers"))
     click.echo(
-        f"    {ux.accent('defenseclaw setup <connector>')} "
-        + ux.dim("Add another agent (codex, claudecode, amp)")
+        f"    {ux.accent('defenseclaw setup <connector>')} " + ux.dim("Add another agent (codex, claudecode, amp)")
     )
 
     store.close()
-    if credential_step is not None and credential_step.status == "fail":
+    if credential_incomplete:
         raise SystemExit(1)
 
 
@@ -823,6 +840,7 @@ def _run_first_run_cmd(  # noqa: PLR0913 - mirrors click options.
         human_approval=primary["human_approval"],
         hilt_min_severity=primary["hilt_min_severity"] or "",
         credential_protection=credential_protection,
+        defer_credential_protection_setup=bool(extras),
     )
     report = run_first_run(opts)
 
@@ -849,17 +867,28 @@ def _run_first_run_cmd(  # noqa: PLR0913 - mirrors click options.
             quiet=json_summary,
             allow_trusted_path_prompt=interactive_wizard,
         )
-        credential_refresh = _refresh_credential_protection_after_connector_activation(report)
+        credential_setup_deferred = report.credential_protection_deferred
+        credential_refresh = _refresh_credential_protection_after_connector_activation(
+            report,
+            enable_deferred=credential_setup_deferred,
+        )
 
         sidecar_step = None
         if defer_gateway:
-            credential_failed = credential_refresh is not None and credential_refresh.status == "fail"
+            credential_incomplete = any(
+                step.name == "Credential broker" and step.status == "fail" for step in report.setup
+            )
+            if credential_refresh is not None and (
+                credential_refresh.status == "fail"
+                or (credential_setup_deferred and credential_refresh.status != "pass")
+            ):
+                credential_incomplete = True
             expected_connectors = {
                 connector_paths.normalize(item["connector"])
                 for item in connector_settings
                 if item["connector"] != "none"
             }
-            if credential_failed:
+            if credential_incomplete:
                 sidecar_step = StepResult(
                     "Sidecar",
                     "skip",
@@ -937,7 +966,11 @@ def _run_first_run_cmd(  # noqa: PLR0913 - mirrors click options.
         raise SystemExit(1)
 
 
-def _refresh_credential_protection_after_connector_activation(report):
+def _refresh_credential_protection_after_connector_activation(
+    report,
+    *,
+    enable_deferred: bool = False,
+):
     """Reconcile the broker after a first-run connector roster expands."""
     from defenseclaw import config as cfg_mod
     from defenseclaw.bootstrap import (
@@ -948,6 +981,8 @@ def _refresh_credential_protection_after_connector_activation(report):
         _setup_credential_protection_structured,
     )
 
+    if enable_deferred:
+        report.credential_protection_deferred = False
     cfg = None
     try:
         cfg = cfg_mod.load()
@@ -959,13 +994,31 @@ def _refresh_credential_protection_after_connector_activation(report):
             "defenseclaw setup credential-protection --yes",
         )
     else:
-        if not bool(getattr(getattr(cfg, "credential_protection", None), "enabled", False)):
+        enabled = bool(getattr(getattr(cfg, "credential_protection", None), "enabled", False))
+        if not enabled and not enable_deferred:
             return None
-        step = _setup_credential_protection_structured(cfg)
+        if enable_deferred:
+            cfg.credential_protection.enabled = True
+            step = _setup_credential_protection_structured(cfg, already_enabled=False)
+            if step.status != "pass":
+                cfg.credential_protection.enabled = False
+            else:
+                try:
+                    cfg.save()
+                except OSError as exc:
+                    cfg.credential_protection.enabled = False
+                    step = StepResult(
+                        "Credential broker",
+                        "fail",
+                        f"s-gw is ready, but the enabled setting could not be saved: {exc}",
+                        "defenseclaw setup credential-protection --yes",
+                    )
+        else:
+            step = _setup_credential_protection_structured(cfg)
 
     report.setup = [item for item in report.setup if item.name != "Credential broker"] + [step]
     if any(item.name == "Credential broker" for item in report.readiness):
-        if cfg is not None:
+        if cfg is not None and step.status != "fail" and (not enable_deferred or step.status == "pass"):
             readiness = _credential_protection_readiness(cfg)
         else:
             readiness = step

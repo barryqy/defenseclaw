@@ -163,6 +163,9 @@ class FirstRunOptions:
     # choice. Init and quickstart pass an explicit value for fresh installs;
     # reruns never enable or disable credential protection implicitly.
     credential_protection: bool | None = None
+    # Multi-connector init owns one final roster reconciliation. Keep a fresh
+    # setting disabled until that complete roster is ready.
+    defer_credential_protection_setup: bool = False
 
 
 @dataclass
@@ -178,6 +181,7 @@ class FirstRunReport:
     readiness: list[StepResult] = field(default_factory=list)
     next_commands: list[str] = field(default_factory=list)
     connector_mode_warnings: list[dict] = field(default_factory=list)
+    credential_protection_deferred: bool = False
 
     def to_dict(self) -> dict:
         data = {
@@ -655,15 +659,21 @@ def run_first_run(options: FirstRunOptions) -> FirstRunReport:
 
     previous_connectors = {str(name).strip().lower() for name in cfg.active_connectors() if str(name).strip()}
 
+    new_credential_protection_requested = False
+    credential_protection_deferred = False
     if new_config:
-        credential_protection_enabled = options.credential_protection
-        if credential_protection_enabled is None:
+        credential_protection_requested = options.credential_protection
+        if credential_protection_requested is None:
             from defenseclaw.credential_protection import (
                 credential_protection_default_enabled,
             )
 
-            credential_protection_enabled = credential_protection_default_enabled()
-        cfg.credential_protection.enabled = credential_protection_enabled
+            credential_protection_requested = credential_protection_default_enabled()
+        new_credential_protection_requested = bool(credential_protection_requested)
+        # Keep the persisted setting off until both the broker and its active
+        # connector registrations are ready. A setup failure or interruption
+        # must not publish an enabled-but-unprotected fresh installation.
+        cfg.credential_protection.enabled = False
 
     try:
         repaired_migration_state = repair_pending_first_run_config(cfg)
@@ -738,9 +748,25 @@ def run_first_run(options: FirstRunOptions) -> FirstRunReport:
         _persist_first_run_secrets(cfg, options, setup)
 
         credential_setup_step = None
-        if new_config and cfg.credential_protection.enabled:
-            credential_setup_step = _setup_credential_protection_structured(cfg)
-            setup.append(credential_setup_step)
+        if new_config and new_credential_protection_requested:
+            if options.defer_credential_protection_setup:
+                credential_protection_deferred = True
+                setup.append(
+                    StepResult(
+                        "Credential broker",
+                        "skip",
+                        "deferred until the complete connector roster is configured",
+                    )
+                )
+            else:
+                cfg.credential_protection.enabled = True
+                credential_setup_step = _setup_credential_protection_structured(
+                    cfg,
+                    already_enabled=False,
+                )
+                if credential_setup_step.status != "pass":
+                    cfg.credential_protection.enabled = False
+                setup.append(credential_setup_step)
         elif new_config:
             detail = (
                 "opted out"
@@ -791,8 +817,11 @@ def run_first_run(options: FirstRunOptions) -> FirstRunReport:
                 )
             )
 
-        credential_setup_failed = credential_setup_step is not None and credential_setup_step.status == "fail"
-        if options.start_gateway and not credential_setup_failed:
+        credential_setup_incomplete = credential_protection_deferred or (
+            credential_setup_step is not None
+            and (credential_setup_step.status == "fail" or (new_config and credential_setup_step.status != "pass"))
+        )
+        if options.start_gateway and not credential_setup_incomplete:
             setup.append(
                 _start_gateway_structured(
                     cfg,
@@ -843,6 +872,7 @@ def run_first_run(options: FirstRunOptions) -> FirstRunReport:
             readiness=readiness,
             next_commands=next_commands,
             connector_mode_warnings=connector_mode_warnings,
+            credential_protection_deferred=credential_protection_deferred,
         )
     finally:
         try:
@@ -959,6 +989,7 @@ def _setup_credential_protection_structured(
     cfg: Config,
     *,
     removed_connectors: tuple[str, ...] | list[str] = (),
+    already_enabled: bool | None = None,
 ) -> StepResult:
     from defenseclaw.credential_protection import (
         CredentialProtectionError,
@@ -968,9 +999,10 @@ def _setup_credential_protection_structured(
     )
 
     try:
+        was_enabled = bool(cfg.credential_protection.enabled) if already_enabled is None else already_enabled
         status = setup_broker_for_runtime(
             cfg.data_dir,
-            already_enabled=bool(cfg.credential_protection.enabled),
+            already_enabled=was_enabled,
         )
         mcp_results = reconcile_mcp_connector_roster(
             cfg,

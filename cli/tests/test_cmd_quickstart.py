@@ -242,7 +242,7 @@ class QuickstartProfileDefaultsTests(unittest.TestCase):
 
         with open(os.path.join(self.tmp_dir, "config.yaml"), encoding="utf-8") as fh:
             cfg = yaml.safe_load(fh)
-        self.assertEqual(cfg["credential_protection"], {"enabled": True})
+        self.assertNotIn("credential_protection", cfg)
 
     def test_gateway_does_not_start_after_credential_setup_failure(self):
         self.credential_setup.return_value = StepResult(

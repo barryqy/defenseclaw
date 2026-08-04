@@ -326,6 +326,92 @@ class FreshMigrationCursorTests(unittest.TestCase):
         self.assertEqual(credential_step.status, "skip")
         self.assertIn("release artifacts are not installed", credential_step.detail)
 
+    def test_fresh_broker_failure_keeps_persisted_config_disabled(self):
+        import yaml
+        from defenseclaw.bootstrap import FirstRunOptions, StepResult, run_first_run
+
+        data_dir = os.path.join(self._tmp.name, "broker-failure")
+
+        def fail_setup(cfg, *, already_enabled=None, removed_connectors=()):
+            with open(os.path.join(data_dir, "config.yaml"), encoding="utf-8") as stream:
+                initial = yaml.safe_load(stream)
+            self.assertNotIn("credential_protection", initial)
+            self.assertTrue(cfg.credential_protection.enabled)
+            self.assertFalse(already_enabled)
+            self.assertEqual(list(removed_connectors), [])
+            return StepResult(
+                "Credential broker",
+                "fail",
+                "supported s-gw runtime unavailable",
+                "defenseclaw setup credential-protection --yes",
+            )
+
+        with (
+            patch.dict(os.environ, {"DEFENSECLAW_HOME": data_dir}),
+            patch(
+                "defenseclaw.credential_protection.credential_protection_default_enabled",
+                return_value=True,
+            ),
+            patch(
+                "defenseclaw.bootstrap._setup_credential_protection_structured",
+                side_effect=fail_setup,
+            ),
+        ):
+            report = run_first_run(
+                FirstRunOptions(
+                    connector="none",
+                    skip_install=True,
+                    start_gateway=False,
+                    verify=False,
+                )
+            )
+
+        self.assertEqual(report.status, "needs_attention")
+        with open(os.path.join(data_dir, "config.yaml"), encoding="utf-8") as stream:
+            persisted = yaml.safe_load(stream)
+        self.assertNotIn("credential_protection", persisted)
+
+    def test_fresh_manual_broker_registration_stays_disabled_and_withholds_gateway(self):
+        import yaml
+        from defenseclaw.bootstrap import FirstRunOptions, StepResult, run_first_run
+
+        data_dir = os.path.join(self._tmp.name, "broker-manual")
+        manual = StepResult(
+            "Credential broker",
+            "warn",
+            "s-gw ready; MCP zeptoclaw=manual",
+            "defenseclaw credential-protection status",
+        )
+        with (
+            patch.dict(os.environ, {"DEFENSECLAW_HOME": data_dir}),
+            patch(
+                "defenseclaw.credential_protection.credential_protection_default_enabled",
+                return_value=True,
+            ),
+            patch(
+                "defenseclaw.bootstrap._setup_credential_protection_structured",
+                return_value=manual,
+            ),
+            patch("defenseclaw.bootstrap._start_gateway_structured") as start_gateway,
+        ):
+            report = run_first_run(
+                FirstRunOptions(
+                    connector="none",
+                    skip_install=True,
+                    start_gateway=True,
+                    verify=False,
+                )
+            )
+
+        self.assertEqual(report.status, "partial")
+        start_gateway.assert_not_called()
+        sidecar = next(step for step in report.setup if step.name == "Sidecar")
+        self.assertEqual(sidecar.status, "skip")
+        self.assertIn("credential-protection setup did not complete", sidecar.detail)
+        with open(os.path.join(data_dir, "config.yaml"), encoding="utf-8") as stream:
+            persisted = yaml.safe_load(stream)
+        self.assertNotIn("credential_protection", persisted)
+
     def test_no_connector_first_run_creates_canonical_config_and_cursor_without_connector_setup(self):
         from defenseclaw import migration_state
         from defenseclaw.bootstrap import FirstRunOptions, run_first_run
