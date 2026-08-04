@@ -133,7 +133,7 @@ func TestCleanupOwnedWatchDirsPreservesRecreatedDirectory(t *testing.T) {
 	if err := os.Mkdir(replacement, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	replacementInfo, err := os.Lstat(replacement)
+	replacementInfo, err := snapshotWatchDirIdentity(replacement)
 	if err != nil {
 		t.Fatal(err)
 	}

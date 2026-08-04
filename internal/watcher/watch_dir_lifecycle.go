@@ -49,15 +49,11 @@ func createWatchDir(dir string) ([]ownedWatchDir, error) {
 	}
 	path = filepath.Clean(path)
 	if info, statErr := os.Lstat(path); statErr == nil && watchDirIsLinkOrReparse(path, info) {
-		resolved, resolveErr := filepath.EvalSymlinks(path)
-		if resolveErr != nil {
-			return nil, fmt.Errorf("resolve linked watch directory: %w", resolveErr)
-		}
-		target, targetErr := os.Lstat(resolved)
+		target, targetErr := os.Stat(path)
 		if targetErr != nil {
 			return nil, fmt.Errorf("inspect linked watch directory: %w", targetErr)
 		}
-		if watchDirIsLinkOrReparse(resolved, target) || !target.IsDir() {
+		if !target.IsDir() {
 			return nil, fmt.Errorf("linked watch path target is not a real directory: %s", path)
 		}
 		return nil, nil
@@ -100,11 +96,32 @@ func createWatchDir(dir string) ([]ownedWatchDir, error) {
 			return nil, fmt.Errorf("watch path component is not a real directory: %s", current)
 		}
 		if mkdirErr == nil {
-			created = append(created, ownedWatchDir{path: current, identity: info})
+			identity, identityErr := snapshotWatchDirIdentity(current)
+			if identityErr != nil {
+				_ = cleanupOwnedWatchDirs(created)
+				return nil, fmt.Errorf("record watch path identity: %w", identityErr)
+			}
+			created = append(created, ownedWatchDir{path: current, identity: identity})
 		}
 	}
 
 	return created, nil
+}
+
+func snapshotWatchDirIdentity(path string) (os.FileInfo, error) {
+	dir, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	info, statErr := dir.Stat()
+	closeErr := dir.Close()
+	if statErr != nil {
+		return nil, errors.Join(statErr, closeErr)
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return info, nil
 }
 
 func cleanupOwnedWatchDirs(created []ownedWatchDir) error {
