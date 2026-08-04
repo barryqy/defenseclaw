@@ -203,6 +203,45 @@ class ResetCommandTests(unittest.TestCase):
         self.assertNotIn("Reset complete", result.output)
 
 
+class UnixOwnedCleanupTests(unittest.TestCase):
+    def test_linux_plan_includes_source_ownership_marker(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.dict(os.environ, {"HOME": tmp}, clear=False),
+            patch.object(cmd_uninstall.config_module, "default_data_path", return_value=Path(tmp) / ".defenseclaw"),
+        ):
+            plan = cmd_uninstall._build_plan(
+                wipe_data=True,
+                binaries=True,
+                revert_openclaw=False,
+                remove_plugin=False,
+                platform_name="linux",
+            )
+
+        self.assertIn(".defenseclaw-source-root", tuple(Path(path).name for path in plan.binary_targets))
+
+    def test_binary_removal_clears_source_ownership_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve() / "bin"
+            root.mkdir()
+            cli = root / "defenseclaw"
+            marker = root / ".defenseclaw-source-root"
+            cli.write_text("source cli", encoding="utf-8")
+            marker.write_text("source ownership", encoding="utf-8")
+            plan = cmd_uninstall.UninstallPlan(
+                platform_name="linux",
+                install_root=str(root),
+                gateway_path=str(root / "defenseclaw-gateway"),
+                binary_targets=(str(cli), str(marker)),
+                remove_binaries=True,
+            )
+
+            cmd_uninstall._remove_binaries(plan)
+
+            self.assertFalse(cli.exists())
+            self.assertFalse(marker.exists())
+
+
 class WindowsOwnedCleanupTests(unittest.TestCase):
     def test_windows_plan_freezes_exact_owned_launchers(self):
         with (

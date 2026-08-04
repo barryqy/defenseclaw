@@ -447,6 +447,7 @@ def _owned_binary_targets(platform_name: str) -> tuple[str, tuple[str, ...]]:
             "mcp-scanner",
             "mcp-scanner-api",
             "litellm",
+            ".defenseclaw-source-root",
         )
     return install_root, tuple(os.path.join(install_root, name) for name in names)
 
@@ -830,6 +831,7 @@ def _validate_plan(plan: UninstallPlan) -> None:
                 "mcp-scanner",
                 "mcp-scanner-api",
                 "litellm",
+                ".defenseclaw-source-root",
             }
         )
         for target in plan.binary_targets:
