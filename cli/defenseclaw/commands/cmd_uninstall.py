@@ -1450,6 +1450,9 @@ def _revert_openclaw_python(plan: UninstallPlan) -> None:
 
     pristine = pristine_backup_path(plan.openclaw_config_file, plan.data_dir)
     target = _expand(plan.openclaw_config_file)
+    if not os.path.lexists(target) and not pristine:
+        ux.subhead(f"{plan.openclaw_config_file} is already absent — nothing to revert")
+        return
     if pristine:
         try:
             shutil.copy2(pristine, target)
@@ -1626,6 +1629,50 @@ def _remove_binaries(plan: UninstallPlan | None = None) -> None:
     failures: list[str] = []
     posix_claims = _posix_owned_binary_targets(plan) if plan.platform_name != "win32" else {}
     custody_root = _posix_install_custody(plan, posix_claims) if plan.platform_name != "win32" else None
+    custody_candidates: tuple[Path, ...] = ()
+    if custody_root is not None:
+        source_custody = Path(plan.install_root) / ".defenseclaw-install-custody"
+        user_home = Path(os.path.expanduser("~"))
+        try:
+            Path(plan.install_root).relative_to(user_home)
+            release_custody: Path | None = user_home / ".defenseclaw-install-custody"
+        except ValueError:
+            release_custody = None
+        state_custody = None
+        if plan.data_dir and Path(plan.data_dir).is_absolute():
+            state_custody = Path(plan.data_dir).parent / ".defenseclaw-install-custody"
+        custody_candidates = tuple(
+            dict.fromkeys(
+                root for root in (custody_root, source_custody, release_custody, state_custody) if root is not None
+            )
+        )
+        for pending_root in dict.fromkeys(custody_candidates):
+            try:
+                cleanup_phase = install_publish.inspect_custody_cleanup(pending_root)
+            except (OSError, install_publish.PublishError) as exc:
+                raise OSError(f"could not inspect installer-owned binary custody: {exc}") from exc
+            active = cleanup_phase in {"discarding", "closing"}
+            armed_without_claims = cleanup_phase == "armed" and (pending_root != custody_root or not posix_claims)
+            if not active and not armed_without_claims:
+                continue
+            try:
+                install_publish.discard_custody(pending_root)
+            except (OSError, install_publish.PublishError) as exc:
+                raise OSError(f"could not resume installer-owned binary custody cleanup: {exc}") from exc
+        for pending_root in custody_candidates:
+            if not install_publish.custody_is_bound(pending_root):
+                continue
+            try:
+                install_publish.recover_custody(pending_root)
+            except (OSError, install_publish.PublishError) as exc:
+                raise OSError(f"could not recover installer-owned binary custody: {exc}") from exc
+    if custody_root is not None and posix_claims:
+        try:
+            if not install_publish.custody_cleanup_armed(custody_root):
+                install_publish.recover_custody(custody_root)
+            install_publish.arm_custody_discard(custody_root, Path(plan.install_root))
+        except (OSError, install_publish.PublishError) as exc:
+            raise OSError(f"could not arm installer-owned binary custody cleanup: {exc}") from exc
     targets = list(plan.binary_targets)
     if plan.platform_name == "win32":
         targets.sort(key=lambda path: os.path.basename(path).lower() == "defenseclaw.cmd")
@@ -1683,6 +1730,28 @@ def _remove_binaries(plan: UninstallPlan | None = None) -> None:
                     time.sleep(0.25)
         if last_error is not None:
             failures.append(f"{path}: {last_error}")
+
+    if not failures and custody_root is not None and posix_claims:
+        try:
+            install_publish.discard_custody(custody_root)
+        except (OSError, install_publish.PublishError) as exc:
+            failures.append(f"{custody_root}: could not discard installer-owned binary custody: {exc}")
+
+    if not failures:
+        for extra_root in custody_candidates:
+            if not install_publish.custody_is_bound(extra_root):
+                continue
+            if not install_publish.custody_discardable(extra_root):
+                failures.append(
+                    f"{extra_root}: installer-owned custody contains unexpected or incomplete "
+                    "unresolved entries and was preserved"
+                )
+                break
+            try:
+                install_publish.discard_custody(extra_root)
+            except (OSError, install_publish.PublishError) as exc:
+                failures.append(f"{extra_root}: could not discard installer-owned custody: {exc}")
+                break
 
     if failures:
         raise OSError("; ".join(failures))
