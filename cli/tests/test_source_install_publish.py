@@ -49,7 +49,7 @@ def _path_claim(path: Path) -> tuple[str, tuple[int, int, int, int]]:
 def _source_marker_bytes(**changes: object) -> bytes:
     marker: dict[str, object] = {
         "schema_version": 2,
-        "checkout_root": "/tmp/defenseclaw-checkout",
+        "checkout_root": str(Path(Path.cwd().anchor) / "tmp" / "defenseclaw-checkout"),
         "source_release": "0.8.6",
         "source_install_compatibility_epoch": 2,
         "runtime_config_version": 8,
