@@ -28,3 +28,8 @@ Current queue:
    and IP-address runtime dependencies, together with the PostCSS build chain,
    to remove their reviewed advisories without changing the exact upstream
    source mirror.
+5. `0005-platform-credential-source-metadata.patch` lets the credential-store
+   provider choose default source metadata instead of hard-coding the macOS
+   keychain. Its Linux runtime regression covers setup and keychain enrollment
+   through a fake Secret Service helper. This matches standalone s-gw commit
+   `ec1912085f0747d725dac32ca3d26e19c412abf2`.
