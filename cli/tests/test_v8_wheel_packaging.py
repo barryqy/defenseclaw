@@ -170,6 +170,74 @@ def test_build_hook_rejects_duplicate_v8_source_contract(
         build_hook_module._stage_v8_assets(source, tmp_path / "build")
 
 
+def _wheel_metadata_payload(newline: bytes = b"\n") -> bytes:
+    return newline.join(
+        (
+            b"Metadata-Version: 2.4",
+            b"Name: defenseclaw",
+            b"Version: 0.0.0",
+            b"License-Expression: Apache-2.0",
+            b"License-File: LICENSE",
+            b"License-File: NOTICE",
+            b"",
+            b"DefenseClaw package metadata.",
+            b"",
+        )
+    )
+
+
+def test_wheel_metadata_normalizes_canonical_crlf(
+    build_hook_module: ModuleType,
+    tmp_path: Path,
+) -> None:
+    metadata_path = tmp_path / "METADATA"
+    metadata_path.write_bytes(_wheel_metadata_payload(b"\r\n"))
+    contract = {
+        "production_modules": False,
+        "license_expression": build_hook_module.BASE_LICENSE_EXPRESSION,
+    }
+
+    build_hook_module._update_wheel_metadata(metadata_path, contract, allow_update=False)
+
+    assert metadata_path.read_bytes() == _wheel_metadata_payload()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(
+            _wheel_metadata_payload().replace(b"Name: ", b"Name: \0", 1),
+            id="nul",
+        ),
+        pytest.param(_wheel_metadata_payload(b"\r"), id="bare-cr"),
+        pytest.param(
+            _wheel_metadata_payload(b"\r\n").replace(b"\r\n", b"\n", 1),
+            id="mixed-leading-lf",
+        ),
+        pytest.param(
+            _wheel_metadata_payload().replace(b"\n", b"\r\n", 1),
+            id="mixed-leading-crlf",
+        ),
+    ],
+)
+def test_wheel_metadata_rejects_noncanonical_newlines(
+    build_hook_module: ModuleType,
+    tmp_path: Path,
+    payload: bytes,
+) -> None:
+    metadata_path = tmp_path / "METADATA"
+    metadata_path.write_bytes(payload)
+    contract = {
+        "production_modules": False,
+        "license_expression": build_hook_module.BASE_LICENSE_EXPRESSION,
+    }
+
+    with pytest.raises(RuntimeError, match="not canonical LF or CRLF text"):
+        build_hook_module._update_wheel_metadata(metadata_path, contract, allow_update=False)
+
+    assert metadata_path.read_bytes() == payload
+
+
 def _run_build(arguments: list[str], *, cwd: Path, environment: dict[str, str]) -> None:
     completed = subprocess.run(
         arguments,

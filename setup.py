@@ -325,11 +325,20 @@ def _sgw_wheel_license_contract(
 
 def _update_wheel_metadata(metadata_path: Path, contract: dict, *, allow_update: bool) -> None:
     try:
-        payload = metadata_path.read_bytes()
+        source_payload = metadata_path.read_bytes()
     except OSError as exc:
         raise RuntimeError("wheel distribution metadata is unavailable") from exc
-    if b"\r" in payload or b"\0" in payload or b"\n\n" not in payload:
-        raise RuntimeError("wheel distribution metadata is not canonical LF text")
+    if b"\0" in source_payload:
+        raise RuntimeError("wheel distribution metadata is not canonical LF or CRLF text")
+    if b"\r" in source_payload:
+        unpaired_newlines = source_payload.replace(b"\r\n", b"")
+        if b"\r" in unpaired_newlines or b"\n" in unpaired_newlines:
+            raise RuntimeError("wheel distribution metadata is not canonical LF or CRLF text")
+        payload = source_payload.replace(b"\r\n", b"\n")
+    else:
+        payload = source_payload
+    if b"\n\n" not in payload:
+        raise RuntimeError("wheel distribution metadata is not canonical LF or CRLF text")
     metadata = BytesParser(policy=policy.default).parsebytes(payload)
     if metadata.defects:
         raise RuntimeError("wheel distribution metadata is malformed")
@@ -345,32 +354,34 @@ def _update_wheel_metadata(metadata_path: Path, contract: dict, *, allow_update:
     if not production:
         if expression != BASE_LICENSE_EXPRESSION or expressions != [BASE_LICENSE_EXPRESSION]:
             raise RuntimeError("source-only wheel license expression is invalid")
-        return
-    if expressions == [expression]:
-        return
-    if expressions != [BASE_LICENSE_EXPRESSION]:
-        raise RuntimeError("production wheel license expression is invalid")
-    if not allow_update:
-        raise RuntimeError("prepared wheel license expression does not match the requested s-gw module mode")
+    elif expressions != [expression]:
+        if expressions != [BASE_LICENSE_EXPRESSION]:
+            raise RuntimeError("production wheel license expression is invalid")
+        if not allow_update:
+            raise RuntimeError("prepared wheel license expression does not match the requested s-gw module mode")
 
-    headers, body = payload.split(b"\n\n", 1)
-    lines = headers.split(b"\n")
-    replaced = False
-    output: list[bytes] = []
-    for line in lines:
-        if line.startswith(b"License-Expression:"):
-            if replaced:
-                raise RuntimeError("wheel distribution metadata repeats its license expression")
-            output.append(f"License-Expression: {expression}".encode("ascii"))
-            replaced = True
-            continue
-        output.append(line)
-    if not replaced:
-        raise RuntimeError("wheel distribution metadata lacks its license expression")
+        headers, body = payload.split(b"\n\n", 1)
+        lines = headers.split(b"\n")
+        replaced = False
+        output: list[bytes] = []
+        for line in lines:
+            if line.startswith(b"License-Expression:"):
+                if replaced:
+                    raise RuntimeError("wheel distribution metadata repeats its license expression")
+                output.append(f"License-Expression: {expression}".encode("ascii"))
+                replaced = True
+                continue
+            output.append(line)
+        if not replaced:
+            raise RuntimeError("wheel distribution metadata lacks its license expression")
+        payload = b"\n".join(output) + b"\n\n" + body
+
+    if payload == source_payload:
+        return
     try:
-        metadata_path.write_bytes(b"\n".join(output) + b"\n\n" + body)
+        metadata_path.write_bytes(payload)
     except OSError as exc:
-        raise RuntimeError("could not write production wheel license metadata") from exc
+        raise RuntimeError("could not write canonical wheel license metadata") from exc
 
 
 def _apply_sgw_wheel_license(
