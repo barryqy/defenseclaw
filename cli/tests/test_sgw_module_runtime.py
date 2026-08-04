@@ -588,7 +588,7 @@ def test_windows_private_acl_replaces_only_owner_and_access_sections() -> None:
     assert "$observed.SetSecurityDescriptorSddlForm($replacementSddl, $sections)" in script
     assert "$item.SetAccessControl($observed)" in script
     assert "Get-Acl" not in script
-    assert "Set-Acl -LiteralPath $item.FullName" not in script
+    assert "Set-Acl" not in script
     assert (
         """$sections = [System.Security.AccessControl.AccessControlSections]::Owner -bor `
             [System.Security.AccessControl.AccessControlSections]::Access"""
@@ -704,6 +704,33 @@ foreach ($item in $items) {
             recursive=True,
             code="artifact_invalid",
         )
+
+    sgw_module.windows_private_acl(
+        managed,
+        operation="apply",
+        recursive=True,
+        code="artifact_invalid",
+    )
+    sgw_module.windows_private_acl(
+        managed,
+        operation="verify",
+        recursive=True,
+        code="artifact_invalid",
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires native Windows owner/DACL APIs")
+def test_native_windows_acl_does_not_require_security_module(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    managed = tmp_path / "managed"
+    nested = managed / "nested"
+    nested.mkdir(parents=True)
+    (nested / "receipt.json").write_text("{}\n", encoding="utf-8")
+    empty_module_path = tmp_path / "empty-modules"
+    empty_module_path.mkdir()
+    monkeypatch.setenv("PSModulePath", str(empty_module_path))
 
     sgw_module.windows_private_acl(
         managed,
