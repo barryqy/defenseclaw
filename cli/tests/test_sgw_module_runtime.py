@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -584,6 +585,58 @@ def test_runtime_json_rejects_duplicate_keys_and_bounded_output(tmp_path: Path) 
     assert returncode == 0
     assert output == b"x" * 64
     assert overflow is True
+
+
+def test_runtime_json_accepts_stable_windows_descriptor_ctime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text('{"schema_version":1}\n', encoding="utf-8")
+    real_fstat = sgw_module.os.fstat
+
+    def windows_fstat(descriptor: int) -> SimpleNamespace:
+        info = real_fstat(descriptor)
+        return SimpleNamespace(
+            st_dev=info.st_dev,
+            st_ino=info.st_ino,
+            st_mode=info.st_mode,
+            st_size=info.st_size,
+            st_mtime_ns=info.st_mtime_ns,
+            st_ctime_ns=info.st_ctime_ns + 1,
+        )
+
+    monkeypatch.setattr(sgw_module.os, "fstat", windows_fstat)
+
+    assert sgw_module.read_json(manifest, "manifest_invalid") == {"schema_version": 1}
+
+
+def test_runtime_json_rejects_descriptor_change_during_read(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text('{"schema_version":1}\n', encoding="utf-8")
+    real_fstat = sgw_module.os.fstat
+    calls = 0
+
+    def changing_fstat(descriptor: int) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        info = real_fstat(descriptor)
+        return SimpleNamespace(
+            st_dev=info.st_dev,
+            st_ino=info.st_ino,
+            st_mode=info.st_mode,
+            st_size=info.st_size,
+            st_mtime_ns=info.st_mtime_ns,
+            st_ctime_ns=info.st_ctime_ns + calls,
+        )
+
+    monkeypatch.setattr(sgw_module.os, "fstat", changing_fstat)
+
+    with pytest.raises(sgw_module.ModuleError, match="JSON input changed while it was read"):
+        sgw_module.read_json(manifest, "manifest_invalid")
 
 
 def test_build_cleanup_excludes_mutable_npm_inventory(tmp_path: Path) -> None:

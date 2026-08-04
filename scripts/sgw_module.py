@@ -207,10 +207,29 @@ def unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return value
 
 
+def json_file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        stat.S_IFMT(metadata.st_mode),
+        metadata.st_size,
+        metadata.st_mtime_ns,
+    )
+
+
+def json_file_state(metadata: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (*json_file_identity(metadata), metadata.st_ctime_ns)
+
+
 def read_json(path: Path, code: str) -> dict[str, Any]:
     descriptor = -1
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        named_before = path.lstat()
+        if not stat.S_ISREG(named_before.st_mode):
+            raise ValueError("JSON input must be a bounded regular file")
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode) or before.st_size <= 0 or before.st_size > MAX_JSON_BYTES:
             raise ValueError("JSON input must be a bounded regular file")
@@ -224,17 +243,16 @@ def read_json(path: Path, code: str) -> dict[str, Any]:
             remaining -= len(chunk)
         payload = b"".join(chunks)
         after = os.fstat(descriptor)
-        linked = path.lstat()
+        named_after = path.lstat()
         if (
             len(payload) > MAX_JSON_BYTES
-            or before.st_dev != after.st_dev
-            or before.st_ino != after.st_ino
-            or before.st_mtime_ns != after.st_mtime_ns
-            or before.st_ctime_ns != after.st_ctime_ns
-            or after.st_dev != linked.st_dev
-            or after.st_ino != linked.st_ino
-            or after.st_mtime_ns != linked.st_mtime_ns
-            or after.st_ctime_ns != linked.st_ctime_ns
+            or not stat.S_ISREG(named_after.st_mode)
+            # Windows reports creation time for pathname ctime and NTFS change
+            # time for descriptor ctime, so compare ctime only within one API.
+            or json_file_identity(named_before) != json_file_identity(before)
+            or json_file_identity(named_after) != json_file_identity(after)
+            or json_file_state(named_before) != json_file_state(named_after)
+            or json_file_state(before) != json_file_state(after)
             or len(payload) != after.st_size
         ):
             raise ValueError("JSON input changed while it was read")
