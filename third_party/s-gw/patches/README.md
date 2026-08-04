@@ -37,3 +37,7 @@ Current queue:
    through Node and the portable `tsx` module CLI instead of invoking a
    platform-specific package-manager shim. This matches standalone s-gw commit
    `e05cc5b5760fea969cfed88d7a2e0cef4dd3500d`.
+7. `0007-defenseclaw-setup-help.patch` makes `s-gw setup --help` and
+   `s-gw setup -h` print the restricted DefenseClaw setup contract before any
+   credential-store, service, or UI work. This adapts standalone s-gw commit
+   `af4f01cf0e8bd061778da83c6d2a6e7034ae7b16` to the integrated runtime.

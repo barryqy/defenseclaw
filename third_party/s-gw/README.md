@@ -30,8 +30,9 @@ DefenseClaw-specific changes belong in a visible patch queue under `patches/`
 until the same change is accepted in the standalone s-gw repository. Never
 edit `upstream/` directly.
 
-The current patch queue advances the integrated module to 0.2.0 and adds Linux
-Secret Service setup support. Raw proxy tokenization, pending-enrollment
+The current patch queue advances the integrated module to 0.2.0, adds Linux
+Secret Service setup support, and keeps restricted setup help side-effect free.
+Raw proxy tokenization, pending-enrollment
 ciphertext, the approval console, and approval mutations are deliberately
 absent from the TypeScript runtime; the signed native runner owns those
 surfaces. The DefenseClaw native gateway performs platform-specific runner

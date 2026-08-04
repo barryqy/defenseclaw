@@ -1,0 +1,121 @@
+diff --git a/src/cli.ts b/src/cli.ts
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -80,6 +80,11 @@ async function main(): Promise<void> {
+ 
+   if (!first || first === "help" || first === "--help") {
+     printHelp();
++    return;
++  }
++
++  if (first === "setup" && (second === "-h" || hasFlag(parsed.flags, "help"))) {
++    printRestrictedSetupHelp();
+     return;
+   }
+ 
+@@ -2197,6 +2202,22 @@ Approval and authorization changes are available through:
+ `);
+ }
+ 
++function printRestrictedSetupHelp(): void {
++  process.stdout.write(`Usage: s-gw setup --no-open-console --no-service --no-menubar --no-agents
++
++Configure the credential store for the restricted DefenseClaw runtime.
++
++Required options:
++  --no-open-console                  DefenseClaw owns the approval console
++  --no-service                       DefenseClaw owns the credential service lifecycle
++  --no-menubar                       DefenseClaw does not install the s-gw menu-bar helper
++  --no-agents                        DefenseClaw manages agent integration
++
++Options:
++  -h, --help                         Show this help and exit
++`);
++}
++
+ async function run(): Promise<void> {
+   await main();
+   await printUpdateNotice();
+diff --git a/tests/defenseclaw-runtime.test.ts b/tests/defenseclaw-runtime.test.ts
+--- a/tests/defenseclaw-runtime.test.ts
++++ b/tests/defenseclaw-runtime.test.ts
+@@ -1,5 +1,5 @@
+ import { execFileSync, spawnSync } from "node:child_process";
+-import { access, chmod, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
++import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+ import os from "node:os";
+ import path from "node:path";
+ import { pathToFileURL } from "node:url";
+@@ -42,6 +42,11 @@ describe("DefenseClaw local console launch", () => {
+     expect(cli).not.toContain("function openBrowser");
+     expect(cli).toContain("DefenseClaw owns the authenticated approval console");
+     expect(cli).toContain('Object.prototype.hasOwnProperty.call(flags, "allow-command")');
++    const setupHelpBranch = 'if (first === "setup" && (second === "-h" || hasFlag(parsed.flags, "help")))';
++    expect(cli.indexOf(setupHelpBranch)).toBeLessThan(
++      cli.indexOf("rejectDefenseClawAuthorizationMutation(first, second, third, parsed.flags)")
++    );
++    expect(cli.indexOf(setupHelpBranch)).toBeLessThan(cli.indexOf("const store = new SecretStore()"));
+     expect(cli.indexOf("rejectDefenseClawAuthorizationMutation(first, second, third, parsed.flags)")).toBeLessThan(
+       cli.indexOf("const store = new SecretStore()")
+     );
+@@ -76,6 +81,60 @@ describe("DefenseClaw local console launch", () => {
+     expect(tsconfig).toContain('"src/console-server.ts"');
+   });
+ 
++  it.each(["--help", "-h"])("prints restricted setup help for %s without side effects", async (helpFlag) => {
++    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "sgw-defenseclaw-setup-help-"));
++    const home = path.join(tmpDir, "home");
++    const recoveryHome = path.join(tmpDir, "recovery");
++    const trapDir = path.join(tmpDir, "bin");
++    const sideEffectMarker = path.join(tmpDir, "service-or-ui-command-ran");
++
++    try {
++      await mkdir(trapDir);
++      if (process.platform !== "win32") {
++        const trap = `#!/bin/sh\nprintf '%s\\n' "$0" >> '${sideEffectMarker}'\nexit 97\n`;
++        for (const command of ["launchctl", "open", "systemctl", "xdg-open"]) {
++          const commandPath = path.join(trapDir, command);
++          await writeFile(commandPath, trap, { mode: 0o755 });
++          await chmod(commandPath, 0o755);
++        }
++      }
++
++      const result = spawnSync(
++        process.execPath,
++        [tsxCli, path.join(repoRoot, "src", "cli.ts"), "setup", helpFlag],
++        {
++          cwd: repoRoot,
++          encoding: "utf8",
++          env: {
++            ...process.env,
++            PATH: `${trapDir}${path.delimiter}${process.env.PATH || ""}`,
++            SGW_DISABLE_KEYCHAIN: "1",
++            SGW_DISABLE_ONEPASSWORD_BACKUP: "1",
++            SGW_DISABLE_UPDATE_CHECK: "1",
++            SGW_HOME: home,
++            SGW_MASTER_PASSPHRASE: "synthetic-defenseclaw-setup-help-passphrase",
++            SGW_RECOVERY_HOME: recoveryHome,
++            SGW_TEST_HOME_ROOT: tmpDir,
++            SGW_TEST_MODE: "1"
++          },
++          timeout: 10_000
++        }
++      );
++
++      expect(result.status).toBe(0);
++      expect(result.stderr).toBe("");
++      expect(result.stdout).toContain(
++        "Usage: s-gw setup --no-open-console --no-service --no-menubar --no-agents"
++      );
++      expect(result.stdout).toContain("restricted DefenseClaw runtime");
++      await expect(access(home)).rejects.toThrow();
++      await expect(access(recoveryHome)).rejects.toThrow();
++      await expect(access(sideEffectMarker)).rejects.toThrow();
++    } finally {
++      await rm(tmpDir, { recursive: true, force: true });
++    }
++  });
++
+   it("rejects approval and authorization mutations before creating store state", async () => {
+     const policyAliases = ["add", "update", "edit", "arrange", "organize", "delete", "remove", "enable", "disable"];
+     const rejectedRoutes = [
