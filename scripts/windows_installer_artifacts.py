@@ -49,11 +49,9 @@ from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
-try:
+if __package__:
     from scripts import stage_sgw_modules
-except ModuleNotFoundError as exc:
-    if exc.name != "scripts":
-        raise
+else:
     scripts_dir = str(Path(__file__).resolve().parent)
     sys.path.insert(0, scripts_dir)
     try:

@@ -39,9 +39,9 @@ from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-try:
+if __package__:
     from scripts import build_sgw_module, sgw_module
-except ModuleNotFoundError:
+else:
     import build_sgw_module  # type: ignore[no-redef]
     import sgw_module  # type: ignore[no-redef]
 

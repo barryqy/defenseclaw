@@ -44,6 +44,27 @@ SOURCE_LICENSE = (ROOT / "LICENSE").read_bytes()
 SOURCE_NOTICE = (ROOT / "NOTICE").read_bytes()
 
 
+def test_helper_direct_execution_ignores_unrelated_scripts_package(tmp_path: Path) -> None:
+    shadow_root = tmp_path / "shadow"
+    shadow_package = shadow_root / "scripts"
+    shadow_package.mkdir(parents=True)
+    (shadow_package / "__init__.py").write_text("", encoding="utf-8")
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(shadow_root)
+
+    completed = subprocess.run(
+        [sys.executable, str(HELPER_PATH), "--help"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
 def _zip_bytes(files: dict[str, bytes]) -> bytes:
     import io
 

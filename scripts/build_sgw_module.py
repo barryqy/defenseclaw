@@ -33,9 +33,9 @@ import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-try:
+if __package__:
     from scripts import sgw_module, sync_sgw_vendor
-except ModuleNotFoundError:
+else:
     import sgw_module  # type: ignore[no-redef]
     import sync_sgw_vendor  # type: ignore[no-redef]
 
