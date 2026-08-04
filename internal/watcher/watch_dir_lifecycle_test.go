@@ -227,6 +227,43 @@ func TestEnsureAndWatchDoesNotClaimDuplicateTarget(t *testing.T) {
 	}
 }
 
+func TestEnsureAndWatchAcceptsPreexistingSymlinkDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("junction coverage is Windows-specific")
+	}
+	base := t.TempDir()
+	target := filepath.Join(base, "shared-skills")
+	linked := filepath.Join(base, "skills")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, linked); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	fsw, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fsw.Close()
+
+	created, err := ensureAndWatch(fsw, linked)
+	if err != nil {
+		t.Fatalf("watch linked directory: %v", err)
+	}
+	if len(created) != 0 {
+		t.Fatalf("claimed %d pre-existing linked directories", len(created))
+	}
+	if err := cleanupOwnedWatchDirs(created); err != nil {
+		t.Fatalf("clean linked watch directory: %v", err)
+	}
+	if info, err := os.Lstat(linked); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("pre-existing symlink was not preserved: %v", err)
+	}
+	if info, err := os.Stat(target); err != nil || !info.IsDir() {
+		t.Fatalf("linked target was not preserved: %v", err)
+	}
+}
+
 func TestEnsureAndWatchCleansCreatedDirectoryWhenWatchFails(t *testing.T) {
 	fsw, err := fsnotify.NewWatcher()
 	if err != nil {

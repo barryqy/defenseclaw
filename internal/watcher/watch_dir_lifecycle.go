@@ -48,6 +48,20 @@ func createWatchDir(dir string) ([]ownedWatchDir, error) {
 		return nil, err
 	}
 	path = filepath.Clean(path)
+	if info, statErr := os.Lstat(path); statErr == nil && watchDirIsLinkOrReparse(path, info) {
+		resolved, resolveErr := filepath.EvalSymlinks(path)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolve linked watch directory: %w", resolveErr)
+		}
+		target, targetErr := os.Lstat(resolved)
+		if targetErr != nil {
+			return nil, fmt.Errorf("inspect linked watch directory: %w", targetErr)
+		}
+		if watchDirIsLinkOrReparse(resolved, target) || !target.IsDir() {
+			return nil, fmt.Errorf("linked watch path target is not a real directory: %s", path)
+		}
+		return nil, nil
+	}
 
 	missing := make([]string, 0, 2)
 	for current := path; ; current = filepath.Dir(current) {
