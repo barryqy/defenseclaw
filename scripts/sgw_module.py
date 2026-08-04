@@ -129,7 +129,7 @@ foreach ($item in $items) {
         throw "managed path is a reparse point"
     }
     $isDirectory = [bool]$item.PSIsContainer
-    $observed = Get-Acl -LiteralPath $item.FullName -ErrorAction Stop
+    $observed = $item.GetAccessControl()
     $expectedInheritance = if ($isDirectory) {
         [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
             [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
@@ -164,7 +164,7 @@ foreach ($item in $items) {
         throw "invalid ACL operation"
     }
 
-    $observed = Get-Acl -LiteralPath $item.FullName -ErrorAction Stop
+    $observed = $item.GetAccessControl()
     if (-not $observed.AreAccessRulesProtected) { throw "managed ACL inherits access" }
     if ($observed.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $currentSid.Value) {
         throw "managed ACL owner mismatch"

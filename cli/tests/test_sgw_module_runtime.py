@@ -587,6 +587,7 @@ def test_windows_private_acl_replaces_only_owner_and_access_sections() -> None:
     assert "RemoveAccessRuleSpecific" not in script
     assert "$observed.SetSecurityDescriptorSddlForm($replacementSddl, $sections)" in script
     assert "$item.SetAccessControl($observed)" in script
+    assert "Get-Acl" not in script
     assert "Set-Acl -LiteralPath $item.FullName" not in script
     assert (
         """$sections = [System.Security.AccessControl.AccessControlSections]::Owner -bor `
@@ -687,7 +688,7 @@ foreach ($item in $items) {
         [System.Security.AccessControl.PropagationFlags]::None,
         [System.Security.AccessControl.AccessControlType]::Allow
     ))
-    Set-Acl -LiteralPath $item.FullName -AclObject $acl -ErrorAction Stop
+    $item.SetAccessControl($acl)
 }
 """,
         managed,
@@ -732,7 +733,8 @@ $sddl = "O:$($currentSid)D:P" +
     "(A;OICI;FA;;;SY)"
 $acl = [System.Security.AccessControl.DirectorySecurity]::new()
 $acl.SetSecurityDescriptorSddlForm($sddl)
-Set-Acl -LiteralPath $args[0] -AclObject $acl -ErrorAction Stop
+$item = Get-Item -LiteralPath $args[0] -Force -ErrorAction Stop
+$item.SetAccessControl($acl)
 """,
         managed,
     )
@@ -790,14 +792,15 @@ $ErrorActionPreference = "Stop"
 $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $sections = [System.Security.AccessControl.AccessControlSections]::Owner -bor `
     [System.Security.AccessControl.AccessControlSections]::Access
-$acl = Get-Acl -LiteralPath $args[0] -ErrorAction Stop
+$item = Get-Item -LiteralPath $args[0] -Force -ErrorAction Stop
+$acl = $item.GetAccessControl()
 $sddl = "O:$($currentSid)D:P" +
     "(A;OICI;FA;;;$currentSid)" +
     "(A;OICI;FA;;;SY)" +
     "(D;OICI;WD;;;WD)"
 $acl.SetSecurityDescriptorSddlForm($sddl, $sections)
-Set-Acl -LiteralPath $args[0] -AclObject $acl -ErrorAction Stop
-$observed = Get-Acl -LiteralPath $args[0] -ErrorAction Stop
+$item.SetAccessControl($acl)
+$observed = $item.GetAccessControl()
 if ($observed.AreAccessRulesCanonical) { throw "fixture DACL was canonicalized" }
 $observed.GetSecurityDescriptorSddlForm(
     [System.Security.AccessControl.AccessControlSections]::Group
@@ -820,7 +823,8 @@ $observed.GetSecurityDescriptorSddlForm(
     )
     group_after = run_native_windows_powershell(
         r"""
-$acl = Get-Acl -LiteralPath $args[0] -ErrorAction Stop
+$item = Get-Item -LiteralPath $args[0] -Force -ErrorAction Stop
+$acl = $item.GetAccessControl()
 if (-not $acl.AreAccessRulesCanonical) { throw "managed DACL remains noncanonical" }
 $acl.GetSecurityDescriptorSddlForm(
     [System.Security.AccessControl.AccessControlSections]::Group
