@@ -104,10 +104,17 @@ RUNNER_CONTRACT = {
 
 _WINDOWS_PRIVATE_ACL_SCRIPT = r"""
 $ErrorActionPreference = "Stop"
-if ($args.Count -ne 3) { throw "invalid ACL request" }
-$operation = $args[0]
-$recursive = $args[1] -eq "recursive"
-$root = [IO.Path]::GetFullPath($args[2])
+if ($args.Count -ne 0) { throw "invalid ACL request" }
+$operation = [Environment]::GetEnvironmentVariable("DEFENSECLAW_SGW_ACL_OPERATION", "Process")
+$scope = [Environment]::GetEnvironmentVariable("DEFENSECLAW_SGW_ACL_SCOPE", "Process")
+$rawRoot = [Environment]::GetEnvironmentVariable("DEFENSECLAW_SGW_ACL_ROOT", "Process")
+if ($operation -notin @("apply", "verify") -or
+    $scope -notin @("single", "recursive") -or
+    [string]::IsNullOrEmpty($rawRoot)) {
+    throw "invalid ACL request"
+}
+$recursive = $scope -eq "recursive"
+$root = [IO.Path]::GetFullPath($rawRoot)
 $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $systemSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-18")
 $wantedSids = @($currentSid.Value, $systemSid.Value) | Select-Object -Unique
@@ -1484,6 +1491,14 @@ def windows_private_acl(
     powershell = trusted_windows_powershell(code=code)
     try:
         resolved = path.resolve(strict=True)
+        child_env = os.environ.copy()
+        child_env.update(
+            {
+                "DEFENSECLAW_SGW_ACL_OPERATION": operation,
+                "DEFENSECLAW_SGW_ACL_SCOPE": "recursive" if recursive else "single",
+                "DEFENSECLAW_SGW_ACL_ROOT": os.fspath(resolved),
+            }
+        )
         result = subprocess.run(
             [
                 powershell,
@@ -1494,11 +1509,9 @@ def windows_private_acl(
                 "Bypass",
                 "-Command",
                 _WINDOWS_PRIVATE_ACL_SCRIPT,
-                operation,
-                "recursive" if recursive else "single",
-                os.fspath(resolved),
             ],
             check=False,
+            env=child_env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

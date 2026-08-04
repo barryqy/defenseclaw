@@ -229,12 +229,13 @@ def fake_release(tmp_path: Path) -> tuple[Path, Path]:
             helper_source.write_bytes(native_payload(target, "helper"))
             helper_source.chmod(0o755)
         license_source = source_root / f"{target}-THIRD_PARTY_LICENSES.txt"
-        license_source.write_text(
-            f"{stage_sgw_modules.SGW_CORE_LICENSE_BEGIN}\n"
-            f"{CORE_LICENSE_TERMS}\n"
-            f"{stage_sgw_modules.SGW_CORE_LICENSE_END}\n"
-            f"s-gw dependency licenses for {target}\n",
-            encoding="utf-8",
+        license_source.write_bytes(
+            (
+                f"{stage_sgw_modules.SGW_CORE_LICENSE_BEGIN}\n"
+                f"{CORE_LICENSE_TERMS}\n"
+                f"{stage_sgw_modules.SGW_CORE_LICENSE_END}\n"
+                f"s-gw dependency licenses for {target}\n"
+            ).encode(),
         )
         sources = {
             "runner": runner_source,
@@ -615,9 +616,10 @@ def test_vendor_inventory_binds_each_file_to_its_git_blob(
 def test_sgw_checkout_contract_uses_git_modes_and_exact_bytes(tmp_path: Path) -> None:
     source = tmp_path / "source.ts"
     source.write_text("export {};\n", encoding="utf-8")
-    source.chmod(0o644)
 
-    assert sync_sgw_vendor.checkout_mode(source, platform_name="posix") == 0o644
+    if os.name != "nt":
+        source.chmod(0o644)
+        assert sync_sgw_vendor.checkout_mode(source, platform_name="posix") == 0o644
     assert sync_sgw_vendor.checkout_mode(source, platform_name="nt") is None
 
     attributes = set((ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines())
@@ -629,10 +631,13 @@ def test_sgw_checkout_contract_uses_git_modes_and_exact_bytes(tmp_path: Path) ->
     }.issubset(attributes)
 
 
-def test_isolated_pep517_sdist_excludes_staged_modules_and_wheel_restages_them(tmp_path: Path) -> None:
+def test_isolated_pep517_sdist_excludes_staged_modules_and_wheel_restages_them(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
     if importlib.util.find_spec("build.__main__") is None:
         pytest.fail("the locked build frontend is unavailable")
 
+    tmp_path = tmp_path_factory.mktemp("p")
     runtime, artifact_dir = fake_release(tmp_path)
     source = isolated_build_source(tmp_path)
 
@@ -670,7 +675,7 @@ def test_isolated_pep517_sdist_excludes_staged_modules_and_wheel_restages_them(t
         notice_members = [name for name in members if name.count("/") == 1 and name.endswith("/NOTICE")]
         assert len(notice_members) == 1
         assert archive.extractfile(notice_members[0]).read() == (ROOT / "NOTICE").read_bytes()
-        unpacked = tmp_path / "unpacked"
+        unpacked = tmp_path / "u"
         if hasattr(tarfile, "data_filter"):
             archive.extractall(unpacked, filter="data")
         else:

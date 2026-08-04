@@ -1284,10 +1284,10 @@ def test_reconcile_uses_exact_driver_mcp_command_and_preserves_other_entries(tmp
     codex_text = codex_config.read_text(encoding="utf-8")
     assert "[mcp_servers.other]" in codex_text
     assert '[mcp_servers."s-gw"]' in codex_text
-    assert managed_entry["args"][0] in codex_text
     assert "npx" not in codex_text
     assert "defenseclaw-tokenizer" not in codex_text
     codex = tomllib.loads(codex_text)
+    assert codex["mcp_servers"]["s-gw"]["args"] == managed_entry["args"]
     assert codex["mcp_servers"]["s-gw"]["env"]["SGW_AGENT_NAME"] == "Codex"
     assert claude["mcpServers"]["s-gw"]["env"]["SGW_AGENT_NAME"] == "Claude Code"
 

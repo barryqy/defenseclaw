@@ -547,6 +547,9 @@ def test_windows_private_acl_uses_bounded_powershell_arguments(
         lambda **_kwargs: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
     )
     monkeypatch.setattr(sgw_module.subprocess, "run", fake_run)
+    monkeypatch.setenv("DEFENSECLAW_SGW_ACL_OPERATION", "hostile")
+    monkeypatch.setenv("DEFENSECLAW_SGW_ACL_SCOPE", "hostile")
+    monkeypatch.setenv("DEFENSECLAW_SGW_ACL_ROOT", "C:\\hostile")
 
     sgw_module.windows_private_acl(
         managed_file,
@@ -558,13 +561,20 @@ def test_windows_private_acl_uses_bounded_powershell_arguments(
     argv = observed["argv"]
     kwargs = observed["kwargs"]
     assert isinstance(argv, list)
-    assert argv[-3:] == ["apply", "single", str(managed_file.resolve())]
-    assert argv[-1] not in sgw_module._WINDOWS_PRIVATE_ACL_SCRIPT
+    assert argv[-2:] == ["-Command", sgw_module._WINDOWS_PRIVATE_ACL_SCRIPT]
+    assert str(managed_file.resolve()) not in argv
     assert isinstance(kwargs, dict)
     assert kwargs["shell"] is False
     assert kwargs["stdin"] is subprocess.DEVNULL
     assert kwargs["stdout"] is subprocess.DEVNULL
     assert kwargs["stderr"] is subprocess.DEVNULL
+    child_env = kwargs["env"]
+    assert isinstance(child_env, dict)
+    assert child_env["DEFENSECLAW_SGW_ACL_OPERATION"] == "apply"
+    assert child_env["DEFENSECLAW_SGW_ACL_SCOPE"] == "single"
+    assert child_env["DEFENSECLAW_SGW_ACL_ROOT"] == str(managed_file.resolve())
+    assert "$args.Count -ne 0" in sgw_module._WINDOWS_PRIVATE_ACL_SCRIPT
+    assert 'GetEnvironmentVariable("DEFENSECLAW_SGW_ACL_ROOT", "Process")' in sgw_module._WINDOWS_PRIVATE_ACL_SCRIPT
     assert "SetAccessRuleProtection($true, $false)" in sgw_module._WINDOWS_PRIVATE_ACL_SCRIPT
     assert 'SecurityIdentifier]::new("S-1-5-18")' in sgw_module._WINDOWS_PRIVATE_ACL_SCRIPT
     source = (ROOT / "scripts" / "sgw_module.py").read_text(encoding="utf-8")
@@ -598,6 +608,17 @@ def test_windows_private_acl_checks_each_ace_scope_before_unioning_rights() -> N
 
 def run_native_windows_powershell(script: str, *arguments: Path) -> subprocess.CompletedProcess[str]:
     powershell = sgw_module.trusted_windows_powershell(code="test_failed")
+    child_env = os.environ.copy()
+    prefix = "DEFENSECLAW_TEST_POWERSHELL_ARG_"
+    for name in [key for key in child_env if key.startswith(prefix)]:
+        child_env.pop(name)
+    argument_loaders: list[str] = []
+    for index, argument in enumerate(arguments):
+        name = f"{prefix}{index}"
+        child_env[name] = str(argument)
+        argument_loaders.append(f'[Environment]::GetEnvironmentVariable("{name}", "Process")')
+    wrapped = "$fixtureArgs = @(\n" + "\n".join(f"    {item}" for item in argument_loaders) + "\n)\n& {\n"
+    wrapped += script + "\n} @fixtureArgs"
     return subprocess.run(
         [
             powershell,
@@ -607,11 +628,11 @@ def run_native_windows_powershell(script: str, *arguments: Path) -> subprocess.C
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
-            script,
-            *(str(argument) for argument in arguments),
+            wrapped,
         ],
         check=True,
         capture_output=True,
+        env=child_env,
         text=True,
         timeout=30,
         shell=False,
@@ -619,7 +640,10 @@ def run_native_windows_powershell(script: str, *arguments: Path) -> subprocess.C
 
 
 @pytest.mark.skipif(os.name != "nt", reason="requires native Windows owner/DACL APIs")
-def test_native_windows_acl_apply_recursively_removes_unwanted_aces(tmp_path: Path) -> None:
+def test_native_windows_acl_apply_recursively_removes_unwanted_aces(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     managed = tmp_path / "managed"
     nested = managed / "nested"
     nested.mkdir(parents=True)
@@ -668,6 +692,9 @@ foreach ($item in $items) {
 """,
         managed,
     )
+    monkeypatch.setenv("DEFENSECLAW_SGW_ACL_OPERATION", "hostile")
+    monkeypatch.setenv("DEFENSECLAW_SGW_ACL_SCOPE", "hostile")
+    monkeypatch.setenv("DEFENSECLAW_SGW_ACL_ROOT", "C:\\hostile")
 
     with pytest.raises(sgw_module.ModuleError, match="private Windows ACL"):
         sgw_module.windows_private_acl(
