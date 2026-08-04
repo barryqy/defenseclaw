@@ -281,7 +281,7 @@ func TestSGWMCPHelperProcess(t *testing.T) {
 			writeSGWHelperResponse(encoder, request.ID, map[string]any{"tools": tools})
 		case "tools/call":
 			if mode == "hang" {
-				select {}
+				time.Sleep(time.Hour)
 			}
 			var params struct {
 				Arguments struct {
