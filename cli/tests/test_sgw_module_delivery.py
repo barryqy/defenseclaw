@@ -62,6 +62,30 @@ def write_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+@pytest.mark.parametrize("value", ["", " ", "\t"])
+def test_stage_cli_uses_source_defaults_for_blank_path_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    monkeypatch.setenv("DEFENSECLAW_SGW_ARTIFACT_DIR", value)
+    monkeypatch.setenv("DEFENSECLAW_SGW_RUNTIME_MANIFEST", value)
+
+    args = stage_sgw_modules.parse_args(["stage", "--destination", "staged"])
+
+    assert args.artifact_dir == Path("dist/sgw")
+    assert args.runtime_manifest == Path("release/s-gw-runners.json")
+
+
+def test_stage_cli_preserves_explicit_path_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEFENSECLAW_SGW_ARTIFACT_DIR", "custom/artifacts")
+    monkeypatch.setenv("DEFENSECLAW_SGW_RUNTIME_MANIFEST", "custom/runtime.json")
+
+    args = stage_sgw_modules.parse_args(["stage", "--destination", "staged"])
+
+    assert args.artifact_dir == Path("custom/artifacts")
+    assert args.runtime_manifest == Path("custom/runtime.json")
+
+
 def signature(private_key: Ed25519PrivateKey, payload: bytes) -> str:
     return base64.b64encode(private_key.sign(payload)).decode("ascii")
 

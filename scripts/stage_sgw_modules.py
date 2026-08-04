@@ -1699,6 +1699,13 @@ def require_all_default() -> bool:
     raise DeliveryError("DEFENSECLAW_REQUIRE_SGW_MODULES must be true or false")
 
 
+def environment_path(name: str, default: str) -> Path:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return Path(default)
+    return Path(value)
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1708,12 +1715,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     stage_parser.add_argument(
         "--artifact-dir",
         type=Path,
-        default=Path(os.environ.get("DEFENSECLAW_SGW_ARTIFACT_DIR", "dist/sgw")),
+        default=environment_path("DEFENSECLAW_SGW_ARTIFACT_DIR", "dist/sgw"),
     )
     stage_parser.add_argument(
         "--runtime-manifest",
         type=Path,
-        default=Path(os.environ.get("DEFENSECLAW_SGW_RUNTIME_MANIFEST", "release/s-gw-runners.json")),
+        default=environment_path("DEFENSECLAW_SGW_RUNTIME_MANIFEST", "release/s-gw-runners.json"),
     )
     stage_parser.add_argument("--require-all", action="store_true", default=require_all_default())
     verify_parser = subparsers.add_parser("verify-wheel")
