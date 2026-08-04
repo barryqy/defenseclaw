@@ -36,6 +36,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.parse
@@ -50,8 +51,15 @@ from typing import BinaryIO
 
 try:
     from scripts import stage_sgw_modules
-except ModuleNotFoundError:
-    import stage_sgw_modules  # type: ignore[no-redef]
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    scripts_dir = str(Path(__file__).resolve().parent)
+    sys.path.insert(0, scripts_dir)
+    try:
+        import stage_sgw_modules  # type: ignore[no-redef]
+    finally:
+        sys.path.remove(scripts_dir)
 
 ZIP_EPOCH = 315532800  # 1980-01-01, the earliest timestamp ZIP can encode.
 BUFFER_SIZE = 1024 * 1024

@@ -14,6 +14,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import time
 import warnings
@@ -554,6 +555,30 @@ def _fixture(tmp_path: Path) -> argparse.Namespace:
         go_inventory=go_inventory,
         authenticode_inventory=authenticode_inventory,
         sgw_sbom=sgw_sbom,
+    )
+
+
+def test_helper_imports_by_file_path_outside_repository(tmp_path: Path) -> None:
+    probe = tmp_path / "load-helper.py"
+    probe.write_text(
+        "import importlib.util\n"
+        f"path = {str(HELPER_PATH)!r}\n"
+        "spec = importlib.util.spec_from_file_location('detached_windows_artifacts', path)\n"
+        "assert spec and spec.loader\n"
+        "module = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(module)\n"
+        "assert module.SGW_CORE_LICENSE\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    subprocess.run(
+        [sys.executable, "-I", str(probe)],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
     )
 
 
