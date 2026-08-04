@@ -5,7 +5,7 @@ VERSION     := 0.8.6
 .DEFAULT_GOAL := help
 GOFLAGS     := -ldflags "-X main.version=$(VERSION)"
 VENV        := .venv
-GOBIN       := $(shell go env GOPATH)/bin
+GOBIN       ?= $(shell go env GOPATH)/bin
 PLUGIN_DIR  := extensions/defenseclaw
 RUFF        := $(shell if [ -x "$(VENV)/bin/ruff" ]; then printf '%s' "$(VENV)/bin/ruff"; elif command -v ruff >/dev/null 2>&1; then command -v ruff; else printf '%s' "$(VENV)/bin/ruff"; fi)
 SOURCE_PLUGIN_INSTALL_TARGET = $(if $(filter openclaw,$(CONNECTOR)),plugin-install,maybe-openclaw-plugin-install)

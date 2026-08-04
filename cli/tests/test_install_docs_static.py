@@ -16,6 +16,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -1351,8 +1352,14 @@ def test_source_install_preflight_refuses_release_and_other_checkout_but_allows_
     make = shutil.which("make")
     if make is None:
         pytest.skip("make is unavailable")
+    tool_dir = tmp_path / "tools"
+    tool_dir.mkdir()
+    go_invoked = tmp_path / "go-invoked"
+    fake_go = tool_dir / "go"
+    fake_go.write_text(f"#!/bin/sh\n: > {shlex.quote(str(go_invoked))}\nexit 99\n", encoding="utf-8")
+    fake_go.chmod(0o755)
     tool_dirs = {str(Path(tool).parent) for name in ("go", "python3") if (tool := shutil.which(name)) is not None}
-    test_path = os.pathsep.join(sorted(tool_dirs) + ["/usr/bin", "/bin"])
+    test_path = os.pathsep.join([str(tool_dir), *sorted(tool_dirs), "/usr/bin", "/bin"])
 
     def run(
         home: Path,
@@ -1459,6 +1466,7 @@ def test_source_install_preflight_refuses_release_and_other_checkout_but_allows_
     (owner_bin / "defenseclaw").unlink()
     allowed = run(owner_home, owner_bin)
     assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+    assert not go_invoked.exists()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="source ownership uses POSIX executables")
