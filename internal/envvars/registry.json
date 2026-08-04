@@ -6,7 +6,7 @@
     "debug": "Verbose-logging toggles. Safe but noisy.",
     "telemetry": "OTel / observability config. Override values normally set in config.yaml.",
     "runtime_path": "Path / binary overrides for installation and runtime layout.",
-    "hook_internal": "Set by hook scripts and the daemon launcher. Do not override manually.",
+    "hook_internal": "Set by hook scripts, the daemon, and trusted child-process launchers. Do not override manually.",
     "upgrade_internal": "Set only by trusted upgrade controllers during fresh-process and staged bridge handoffs. Do not override manually.",
     "credential": "Auth materials (API keys, tokens, passwords). Should reference env vars, not contain raw values in code.",
     "discovery": "Probe / discovery tuning.",
@@ -2971,6 +2971,48 @@
         {"location": "scripts/stage_sgw_modules.py", "description": "Uses the directory as the default authenticated artifact source"}
       ],
       "since": "0.8.11"
+    },
+    {
+      "name": "DEFENSECLAW_SGW_ACL_OPERATION",
+      "category": "hook_internal",
+      "purpose": "Carries the private ACL operation from the authenticated s-gw packaging driver to its bounded Windows PowerShell child.",
+      "default": "unset",
+      "accepted_values": ["apply", "verify", "unset"],
+      "security_impact": "none",
+      "surface_in_doctor": false,
+      "consumers": [
+        {"location": "scripts/sgw_module.py", "description": "Sets the exact operation in the child-only process environment before applying or verifying a managed artifact ACL"}
+      ],
+      "since": "0.8.11",
+      "security_note": "The trusted parent overwrites any ambient value before launch, and the PowerShell child rejects every other value."
+    },
+    {
+      "name": "DEFENSECLAW_SGW_ACL_SCOPE",
+      "category": "hook_internal",
+      "purpose": "Carries the private ACL traversal scope from the authenticated s-gw packaging driver to its bounded Windows PowerShell child.",
+      "default": "unset",
+      "accepted_values": ["single", "recursive", "unset"],
+      "security_impact": "none",
+      "surface_in_doctor": false,
+      "consumers": [
+        {"location": "scripts/sgw_module.py", "description": "Sets the exact traversal scope in the child-only process environment before applying or verifying a managed artifact ACL"}
+      ],
+      "since": "0.8.11",
+      "security_note": "The trusted parent overwrites any ambient value before launch, and the PowerShell child rejects every other value."
+    },
+    {
+      "name": "DEFENSECLAW_SGW_ACL_ROOT",
+      "category": "hook_internal",
+      "purpose": "Carries the canonical managed-artifact path from the authenticated s-gw packaging driver to its bounded Windows PowerShell child.",
+      "default": "unset",
+      "accepted_values": ["absolute filesystem path", "unset"],
+      "security_impact": "none",
+      "surface_in_doctor": false,
+      "consumers": [
+        {"location": "scripts/sgw_module.py", "description": "Sets the already-resolved managed path in the child-only process environment so it is never interpolated into PowerShell source"}
+      ],
+      "since": "0.8.11",
+      "security_note": "The trusted parent overwrites any ambient value with its resolved path and launches PowerShell without positional or shell interpolation."
     },
     {
       "name": "DEFENSECLAW_SGW_MODULE_MANIFEST",
