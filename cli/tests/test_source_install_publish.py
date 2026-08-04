@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -40,6 +41,81 @@ def _claim(completed: subprocess.CompletedProcess[str]) -> tuple[str, tuple[int,
 
 def _path_claim(path: Path) -> tuple[str, tuple[int, int, int, int]]:
     return _claim(_run("path-identity", path))
+
+
+def _source_marker_bytes(**changes: object) -> bytes:
+    marker: dict[str, object] = {
+        "schema_version": 2,
+        "checkout_root": "/tmp/defenseclaw-checkout",
+        "source_release": "0.8.6",
+        "source_install_compatibility_epoch": 2,
+        "runtime_config_version": 8,
+        "gateway_sha256": "0" * 64,
+    }
+    marker.update(changes)
+    return json.dumps(marker, sort_keys=True).encode("utf-8")
+
+
+def _parse_source_marker(raw: bytes) -> dict[str, int | str]:
+    return install_publish.parse_source_marker(
+        raw,
+        source_release="0.8.6",
+        compatibility_epoch=2,
+        runtime_version=8,
+        allow_source_transition=True,
+    )
+
+
+@pytest.mark.parametrize("encoding", ("utf-16", "utf-32"))
+def test_source_marker_requires_strict_utf8(encoding: str) -> None:
+    raw = _source_marker_bytes().decode("utf-8").encode(encoding)
+
+    with pytest.raises(install_publish.SourceMarkerError, match="not valid UTF-8 JSON"):
+        _parse_source_marker(raw)
+
+
+def test_source_marker_rejects_duplicate_fields() -> None:
+    raw = _source_marker_bytes()
+    duplicated = b'{"schema_version":2,' + raw.removeprefix(b"{")
+
+    with pytest.raises(install_publish.SourceMarkerError, match="duplicate field 'schema_version'"):
+        _parse_source_marker(duplicated)
+
+
+@pytest.mark.parametrize("schema_version", (2.0, "2", True))
+def test_source_marker_requires_an_integer_schema_version(schema_version: object) -> None:
+    with pytest.raises(install_publish.SourceMarkerError, match="marker schema must be 2"):
+        _parse_source_marker(_source_marker_bytes(schema_version=schema_version))
+
+
+def test_source_marker_wraps_oversized_json_integers() -> None:
+    raw = _source_marker_bytes().replace(b'"runtime_config_version": 8', b'"runtime_config_version": ' + b"9" * 5000)
+
+    with pytest.raises(install_publish.SourceMarkerError, match="not valid UTF-8 JSON"):
+        _parse_source_marker(raw)
+
+
+def test_source_marker_rejects_every_c0_and_c1_control() -> None:
+    for codepoint in (*range(0x20), *range(0x7F, 0xA0)):
+        raw = _source_marker_bytes(checkout_root="/tmp/defenseclaw-" + chr(codepoint) + "checkout")
+        with pytest.raises(
+            install_publish.SourceMarkerError,
+            match="checkout_root must be a canonical non-root absolute path",
+        ):
+            _parse_source_marker(raw)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"source_release": "0.8.7"},
+        {"source_install_compatibility_epoch": 3},
+        {"runtime_config_version": 9},
+    ),
+)
+def test_source_marker_rejects_newer_compatibility_values(changes: dict[str, object]) -> None:
+    with pytest.raises(install_publish.SourceMarkerError, match="newer than this checkout"):
+        _parse_source_marker(_source_marker_bytes(**changes))
 
 
 def test_windows_file_disposition_abi_uses_one_byte_boolean() -> None:
@@ -514,6 +590,51 @@ def test_unlink_exact_preserves_replacement_and_removes_exact_inode(tmp_path: Pa
 
 
 @pytest.mark.skipif(os.name == "nt", reason="descriptor-bound publisher is POSIX-only")
+def test_symlink_retirement_revalidates_target_after_entering_custody(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path.resolve() / "defenseclaw"
+    foreign_target = tmp_path / "foreign" / "defenseclaw"
+    expected_target = tmp_path / "managed" / "defenseclaw"
+    destination.symlink_to(foreign_target)
+    identity = install_publish.path_identity(destination)
+    custody = tmp_path / "custody"
+    real_readlink = install_publish.os.readlink
+    reads = 0
+
+    def spoof_first_target(path, *args, **kwargs):
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            return str(expected_target)
+        return real_readlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(install_publish.os, "readlink", spoof_first_target)
+    removed = install_publish.unlink_exact_symlink(
+        destination,
+        identity,
+        (str(expected_target),),
+        custody_root=custody,
+    )
+    monkeypatch.setattr(install_publish.os, "readlink", real_readlink)
+
+    assert not removed
+    assert reads == 2
+    assert os.readlink(destination) == str(foreign_target)
+    intent = json.loads(next(custody.glob("intent-*.json")).read_bytes())
+    assert intent["schema_version"] == 2
+    assert intent["kind"] == "symlink"
+    assert intent["symlink_targets"] == [str(expected_target)]
+    with pytest.raises(
+        install_publish.PublishError,
+        match="retirement recovery preserved unresolved state",
+    ):
+        install_publish.recover_custody(custody)
+    assert os.readlink(destination) == str(foreign_target)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="descriptor-bound publisher is POSIX-only")
 def test_real_directory_reservation_refuses_symlink_ancestor(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -743,6 +864,16 @@ def test_exact_retirement_recovers_after_crash_post_rename(
     install_publish.recover_custody(custody)
     assert not destination.exists()
     assert next(custody.glob("retired-*")).read_bytes() == b"attempt-owned\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="descriptor-bound publisher is POSIX-only")
+def test_retirement_recovery_wraps_non_object_intent(tmp_path: Path) -> None:
+    custody = tmp_path / "custody"
+    install_publish.prepare_custody(custody, tmp_path)
+    (custody / "intent-invalid.json").write_text("[]\n", encoding="utf-8")
+
+    with pytest.raises(install_publish.PublishError, match="invalid intent"):
+        install_publish.recover_custody(custody)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="descriptor-bound publisher is POSIX-only")

@@ -13,9 +13,11 @@ import hashlib
 import json
 import ntpath
 import os
+import re
 import stat
 import struct
 import sys
+import unicodedata
 import uuid
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
@@ -26,11 +28,150 @@ class PublishError(RuntimeError):
     pass
 
 
+class SourceMarkerError(ValueError):
+    pass
+
+
 BasicIdentity = tuple[int, int]
 StrongIdentity = tuple[int, int, int, int]
 ObjectIdentity = tuple[int, ...]
 MAX_CUSTODY_ENTRIES = 128
 CUSTODY_MARKER = b"DefenseClaw deterministic retirement custody v1\n"
+SOURCE_MARKER_SCHEMA_VERSION = 2
+SOURCE_MARKER_MAX_BYTES = 16 * 1024
+SOURCE_MARKER_KEYS = frozenset(
+    {
+        "schema_version",
+        "checkout_root",
+        "source_release",
+        "source_install_compatibility_epoch",
+        "runtime_config_version",
+        "gateway_sha256",
+    }
+)
+SOURCE_RELEASE_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _source_release_tuple(value: str) -> tuple[int, int, int]:
+    if SOURCE_RELEASE_RE.fullmatch(value) is None:
+        raise SourceMarkerError(f"source-install marker source_release must be canonical X.Y.Z, got {value!r}")
+    try:
+        return tuple(int(part) for part in value.split("."))  # type: ignore[return-value]
+    except ValueError as exc:
+        raise SourceMarkerError("source-install marker source_release is too large") from exc
+
+
+def _has_control_character(value: str) -> bool:
+    return any(unicodedata.category(character) == "Cc" for character in value)
+
+
+def parse_source_marker(
+    raw: bytes,
+    *,
+    source_release: str,
+    compatibility_epoch: int,
+    runtime_version: int,
+    allow_source_transition: bool = False,
+) -> dict[str, int | str]:
+    """Parse the closed source-install marker and enforce caller compatibility."""
+
+    if not 0 < len(raw) <= SOURCE_MARKER_MAX_BYTES:
+        raise SourceMarkerError("source-install marker must be bounded and nonempty")
+    try:
+        text = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise SourceMarkerError("source-install marker is not valid UTF-8 JSON") from exc
+
+    def reject_duplicates(pairs):
+        document = {}
+        for key, value in pairs:
+            if key in document:
+                raise SourceMarkerError(f"source-install marker contains duplicate field {key!r}")
+            document[key] = value
+        return document
+
+    try:
+        payload = json.loads(text, object_pairs_hook=reject_duplicates)
+    except SourceMarkerError:
+        raise
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise SourceMarkerError("source-install marker is not valid UTF-8 JSON") from exc
+    if not isinstance(payload, dict) or set(payload) != SOURCE_MARKER_KEYS:
+        raise SourceMarkerError(
+            f"source-install marker must contain exactly the v2 fields {sorted(SOURCE_MARKER_KEYS)}"
+        )
+    schema_version = payload.get("schema_version")
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version != SOURCE_MARKER_SCHEMA_VERSION
+    ):
+        raise SourceMarkerError(f"source-install marker schema must be {SOURCE_MARKER_SCHEMA_VERSION}")
+
+    marker_release = payload.get("source_release")
+    marker_epoch = payload.get("source_install_compatibility_epoch")
+    marker_runtime = payload.get("runtime_config_version")
+    if not isinstance(marker_release, str):
+        raise SourceMarkerError("source-install marker source_release must be a string")
+    marker_release_key = _source_release_tuple(marker_release)
+    for label, value in (
+        ("source_install_compatibility_epoch", marker_epoch),
+        ("runtime_config_version", marker_runtime),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise SourceMarkerError(f"source-install marker {label} must be a positive integer")
+
+    checkout_root = payload.get("checkout_root")
+    if (
+        not isinstance(checkout_root, str)
+        or _has_control_character(checkout_root)
+        or not os.path.isabs(checkout_root)
+        or os.path.normpath(checkout_root) != checkout_root
+        or checkout_root == str(Path(checkout_root).anchor)
+    ):
+        raise SourceMarkerError("source-install marker checkout_root must be a canonical non-root absolute path")
+
+    gateway_sha256 = payload.get("gateway_sha256")
+    if not isinstance(gateway_sha256, str) or SHA256_RE.fullmatch(gateway_sha256) is None:
+        raise SourceMarkerError("source-install marker gateway_sha256 is invalid")
+
+    if (
+        not isinstance(source_release, str)
+        or not isinstance(compatibility_epoch, int)
+        or isinstance(compatibility_epoch, bool)
+        or compatibility_epoch < 1
+        or not isinstance(runtime_version, int)
+        or isinstance(runtime_version, bool)
+        or runtime_version < 1
+    ):
+        raise SourceMarkerError("source-install marker compatibility values are invalid")
+    source_release_key = _source_release_tuple(source_release)
+    if allow_source_transition:
+        future_fields: list[str] = []
+        if marker_release_key > source_release_key:
+            future_fields.append(f"source_release={marker_release!r}")
+        if marker_epoch > compatibility_epoch:
+            future_fields.append(f"source_install_compatibility_epoch={marker_epoch!r}")
+        if marker_runtime > runtime_version:
+            future_fields.append(f"runtime_config_version={marker_runtime!r}")
+        if future_fields:
+            raise SourceMarkerError(
+                "source-install marker is newer than this checkout (" + ", ".join(future_fields) + ")"
+            )
+    else:
+        expected = {
+            "source_release": source_release,
+            "source_install_compatibility_epoch": compatibility_epoch,
+            "runtime_config_version": runtime_version,
+        }
+        for field, value in expected.items():
+            if payload[field] != value:
+                raise SourceMarkerError(
+                    f"source-install marker {field}={payload[field]!r} does not match checkout {value!r}"
+                )
+
+    return payload
 
 
 # Win32 source installs use exact regular-file copies instead of symlinks.
@@ -242,14 +383,7 @@ class _WindowsPublicationAPI:
 
     @staticmethod
     def _validate_leaf(leaf: str) -> None:
-        if (
-            not leaf
-            or leaf in {".", ".."}
-            or "\\" in leaf
-            or "/" in leaf
-            or "\x00" in leaf
-            or ":" in leaf
-        ):
+        if not leaf or leaf in {".", ".."} or "\\" in leaf or "/" in leaf or "\x00" in leaf or ":" in leaf:
             raise PublishError(f"managed entry has an unsafe Windows leaf: {leaf!r}")
 
     def _open_relative(
@@ -322,11 +456,7 @@ class _WindowsPublicationAPI:
     def open_directory(self, path: Path) -> int:
         handle = self._open(
             path,
-            access=(
-                _WINDOWS_FILE_LIST_DIRECTORY
-                | _WINDOWS_FILE_TRAVERSE
-                | _WINDOWS_FILE_READ_ATTRIBUTES
-            ),
+            access=(_WINDOWS_FILE_LIST_DIRECTORY | _WINDOWS_FILE_TRAVERSE | _WINDOWS_FILE_READ_ATTRIBUTES),
             # Pin the root pathname while all descendant opens are resolved
             # relative to its exact handle. Reparse mutation no longer
             # redirects children because no child lookup re-enters this path.
@@ -361,9 +491,7 @@ class _WindowsPublicationAPI:
             share=_WINDOWS_FILE_SHARE_READ | _WINDOWS_FILE_SHARE_WRITE,
             disposition=disposition,
             options=(
-                _WINDOWS_FILE_DIRECTORY_FILE
-                | _WINDOWS_FILE_SYNCHRONOUS_IO_NONALERT
-                | _WINDOWS_FILE_OPEN_REPARSE_POINT
+                _WINDOWS_FILE_DIRECTORY_FILE | _WINDOWS_FILE_SYNCHRONOUS_IO_NONALERT | _WINDOWS_FILE_OPEN_REPARSE_POINT
             ),
         )
         try:
@@ -396,11 +524,7 @@ class _WindowsPublicationAPI:
         handle = self._open_relative(
             parent_handle,
             leaf,
-            access=(
-                _WINDOWS_SYNCHRONIZE
-                | _WINDOWS_FILE_READ_DATA
-                | _WINDOWS_FILE_READ_ATTRIBUTES
-            ),
+            access=(_WINDOWS_SYNCHRONIZE | _WINDOWS_FILE_READ_DATA | _WINDOWS_FILE_READ_ATTRIBUTES),
             share=_WINDOWS_FILE_SHARE_READ,
             disposition=_WINDOWS_NT_FILE_OPEN,
             options=(
@@ -450,12 +574,7 @@ class _WindowsPublicationAPI:
         handle = self._open_relative(
             parent_handle,
             leaf,
-            access=(
-                _WINDOWS_SYNCHRONIZE
-                | _WINDOWS_FILE_READ_DATA
-                | _WINDOWS_FILE_READ_ATTRIBUTES
-                | _WINDOWS_DELETE
-            ),
+            access=(_WINDOWS_SYNCHRONIZE | _WINDOWS_FILE_READ_DATA | _WINDOWS_FILE_READ_ATTRIBUTES | _WINDOWS_DELETE),
             share=_WINDOWS_FILE_SHARE_READ,
             disposition=_WINDOWS_NT_FILE_OPEN,
             options=(
@@ -689,9 +808,7 @@ def _windows_publish_regular(
     api = _windows_api()
     with ExitStack() as held:
         source_chain = held.enter_context(_hold_windows_directory_chain(source.parent, create=False))
-        destination_chain = held.enter_context(
-            _hold_windows_directory_chain(destination.parent, create=False)
-        )
+        destination_chain = held.enter_context(_hold_windows_directory_chain(destination.parent, create=False))
         _validate_windows_directory_chain(source_chain)
         _validate_windows_directory_chain(destination_chain)
         source_handle = api.open_regular_at(source_chain[-1][0], source.name)
@@ -742,13 +859,9 @@ def _windows_publish_regular(
                 )
                 publication_owned = False
                 try:
-                    publication_owned = (
-                        api.identity(api.information(publication_handle)) == stage_identity
-                    )
+                    publication_owned = api.identity(api.information(publication_handle)) == stage_identity
                     if not publication_owned:
-                        raise PublishError(
-                            f"source-install staging identity changed and was preserved: {destination}"
-                        )
+                        raise PublishError(f"source-install staging identity changed and was preserved: {destination}")
                     if api.digest(publication_handle) != source_digest:
                         raise PublishError(f"source-install staging changed before publication: {destination}")
                     _validate_windows_directory_chain(source_chain)
@@ -1238,15 +1351,24 @@ def _retirement_document(
     canonical: str,
     expected: ObjectIdentity,
     kind: str,
+    symlink_targets: tuple[str, ...] | None = None,
 ) -> bytes:
+    document: dict[str, object] = {
+        "canonical": canonical,
+        "identity": list(expected),
+        "kind": kind,
+        "schema_version": 1,
+    }
+    if kind == "symlink":
+        if not symlink_targets:
+            raise PublishError("symlink retirement requires an allowed target")
+        document["schema_version"] = 2
+        document["symlink_targets"] = list(symlink_targets)
+    elif symlink_targets is not None:
+        raise PublishError("symlink targets are invalid for this retirement kind")
     return (
         json.dumps(
-            {
-                "canonical": canonical,
-                "identity": list(expected),
-                "kind": kind,
-                "schema_version": 1,
-            },
+            document,
             separators=(",", ":"),
             sort_keys=True,
         )
@@ -1254,8 +1376,13 @@ def _retirement_document(
     ).encode()
 
 
-def _retirement_names(canonical: str, expected: ObjectIdentity, kind: str) -> tuple[str, str]:
-    digest = hashlib.sha256(_retirement_document(canonical, expected, kind)).hexdigest()
+def _retirement_names(
+    canonical: str,
+    expected: ObjectIdentity,
+    kind: str,
+    symlink_targets: tuple[str, ...] | None = None,
+) -> tuple[str, str]:
+    digest = hashlib.sha256(_retirement_document(canonical, expected, kind, symlink_targets)).hexdigest()
     return f"intent-{digest}.json", f"retired-{digest}"
 
 
@@ -1413,7 +1540,36 @@ def _kind_matches(metadata: os.stat_result, kind: str) -> bool:
         return stat.S_ISDIR(metadata.st_mode)
     if kind == "entry":
         return not stat.S_ISDIR(metadata.st_mode)
+    if kind == "symlink":
+        return stat.S_ISLNK(metadata.st_mode)
     raise PublishError("retirement kind is invalid")
+
+
+def _normalized_symlink_targets(targets: tuple[str, ...]) -> tuple[str, ...]:
+    if not targets:
+        raise PublishError("symlink retirement requires an allowed target")
+    normalized: set[str] = set()
+    for target in targets:
+        if not isinstance(target, str) or not os.path.isabs(target):
+            raise PublishError("symlink retirement targets must be absolute")
+        normalized.add(os.path.normcase(os.path.abspath(target)))
+    return tuple(sorted(normalized))
+
+
+def _symlink_target_validator(canonical: str, targets: tuple[str, ...]):
+    canonical_parent = os.path.dirname(canonical)
+    allowed = frozenset(targets)
+
+    def validate(parent_fd: int, leaf: str, _expected: ObjectIdentity) -> bool:
+        try:
+            target = os.readlink(leaf, dir_fd=parent_fd)
+        except OSError:
+            return False
+        if not os.path.isabs(target):
+            target = os.path.join(canonical_parent, target)
+        return os.path.normcase(os.path.abspath(target)) in allowed
+
+    return validate
 
 
 def _retire_exact_at(
@@ -1425,12 +1581,20 @@ def _retire_exact_at(
     kind: str,
     *,
     validator=None,
+    symlink_targets: tuple[str, ...] | None = None,
     recover_only: bool = False,
 ) -> bool:
     if os.fstat(parent_fd).st_dev != os.fstat(custody_fd).st_dev:
         raise PublishError("retirement custody must be on the managed object's filesystem")
-    intent, retired = _retirement_names(canonical, expected, kind)
-    document = _retirement_document(canonical, expected, kind)
+    if kind == "symlink":
+        if validator is not None or symlink_targets is None:
+            raise PublishError("symlink retirement proof is invalid")
+        symlink_targets = _normalized_symlink_targets(symlink_targets)
+        validator = _symlink_target_validator(canonical, symlink_targets)
+    elif symlink_targets is not None:
+        raise PublishError("symlink targets are invalid for this retirement kind")
+    intent, retired = _retirement_names(canonical, expected, kind, symlink_targets)
+    document = _retirement_document(canonical, expected, kind, symlink_targets)
 
     for _attempt in range(8):
         intent_exists = _read_regular_at(custody_fd, intent, missing_ok=True) is not None
@@ -1852,6 +2016,7 @@ def _unlink_exact_at(
     *,
     custody_fd: int | None = None,
     canonical: str | None = None,
+    symlink_targets: tuple[str, ...] | None = None,
 ) -> bool:
     owned_custody = -1
     if custody_fd is None:
@@ -1880,7 +2045,8 @@ def _unlink_exact_at(
             expected,
             custody_fd,
             canonical or leaf,
-            "entry",
+            "symlink" if symlink_targets is not None else "entry",
+            symlink_targets=symlink_targets,
         )
     finally:
         if owned_custody >= 0:
@@ -1904,6 +2070,34 @@ def unlink_exact(
             expected,
             custody_fd=custody_fd,
             canonical=str(destination),
+        )
+    finally:
+        os.close(custody_fd)
+        os.close(parent_fd)
+
+
+def unlink_exact_symlink(
+    destination: Path,
+    expected: ObjectIdentity,
+    expected_targets: tuple[str, ...],
+    *,
+    custody_root: Path | None = None,
+) -> bool:
+    """Retire an exact symlink only when its retired target is installer-owned."""
+
+    if not destination.is_absolute() or not destination.name or destination.name in {".", ".."}:
+        raise PublishError(f"symlink retirement path is unsafe: {destination}")
+    targets = _normalized_symlink_targets(expected_targets)
+    parent_fd = _open_directory(destination.parent, create=False)
+    custody_fd = _open_custody_root(custody_root or _default_custody_root(destination), create=True)
+    try:
+        return _unlink_exact_at(
+            parent_fd,
+            destination.name,
+            expected,
+            custody_fd=custody_fd,
+            canonical=str(destination),
+            symlink_targets=targets,
         )
     finally:
         os.close(custody_fd)
@@ -2082,7 +2276,7 @@ def recover_custody(custody_root: Path) -> None:
             return
         raise
     try:
-        documents: list[tuple[Path, ObjectIdentity, str, str]] = []
+        documents: list[tuple[Path, ObjectIdentity, str, str, tuple[str, ...] | None]] = []
         with os.scandir(custody_fd) as entries:
             names = sorted(entry.name for entry in entries if entry.name.startswith("intent-"))
         for name in names:
@@ -2090,26 +2284,41 @@ def recover_custody(custody_root: Path) -> None:
             assert raw is not None
             try:
                 document = json.loads(raw)
-                if set(document) != {"canonical", "identity", "kind", "schema_version"}:
+                if not isinstance(document, dict):
+                    raise ValueError
+                schema_version = document.get("schema_version")
+                expected_fields = {"canonical", "identity", "kind", "schema_version"}
+                if schema_version == 2:
+                    expected_fields.add("symlink_targets")
+                if set(document) != expected_fields:
                     raise ValueError
                 canonical = Path(document["canonical"])
                 identity = tuple(document["identity"])
                 kind = document["kind"]
+                symlink_targets = None
+                if schema_version == 2:
+                    raw_targets = document["symlink_targets"]
+                    if not isinstance(raw_targets, list):
+                        raise ValueError
+                    symlink_targets = tuple(raw_targets)
+                    if symlink_targets != _normalized_symlink_targets(symlink_targets):
+                        raise ValueError
                 if (
-                    document["schema_version"] != 1
+                    schema_version not in {1, 2}
                     or not canonical.is_absolute()
                     or len(identity) not in {2, 4}
                     or any(not isinstance(value, int) or value <= 0 for value in identity[:3])
                     or (len(identity) == 4 and not 0 <= identity[3] < 1_000_000_000)
-                    or kind not in {"entry", "directory", "tree"}
-                    or _retirement_names(str(canonical), identity, kind)[0] != name
+                    or (schema_version == 1 and kind not in {"entry", "directory", "tree"})
+                    or (schema_version == 2 and kind != "symlink")
+                    or _retirement_names(str(canonical), identity, kind, symlink_targets)[0] != name
                 ):
                     raise ValueError
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
                 raise PublishError("retirement custody contains an invalid intent") from exc
-            documents.append((canonical, identity, kind, name))
+            documents.append((canonical, identity, kind, name, symlink_targets))
 
-        for canonical, identity, kind, _name in sorted(
+        for canonical, identity, kind, _name, symlink_targets in sorted(
             documents,
             key=lambda item: len(item[0].parts),
             reverse=True,
@@ -2134,6 +2343,7 @@ def recover_custody(custody_root: Path) -> None:
                     str(canonical),
                     kind,
                     validator=validator,
+                    symlink_targets=symlink_targets,
                     recover_only=True,
                 ):
                     raise PublishError(f"retirement recovery preserved unresolved state: {canonical}")
