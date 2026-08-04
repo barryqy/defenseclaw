@@ -20,12 +20,17 @@ param(
     [string]$DiagnosticsRoot = '',
     [ValidateSet('codex', 'claudecode', 'amp')][string]$Connector = 'codex',
     [switch]$AllowCurrentUserSetupAcceptance,
+    [switch]$NoCredentialProtection,
     [switch]$NoRun
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'windows-native-paths.ps1')
+
+if ($NoCredentialProtection -and $Operation -notin @('setup-acceptance', 'contract')) {
+    throw '-NoCredentialProtection is restricted to source-only Setup acceptance and connector contracts'
+}
 
 $windowsResourceVerifierName = 'DefenseClawWindowsResourceVerifier-x64.exe'
 $windowsResourceIconName = 'DefenseClawWindowsResourceIcon.png'
@@ -3302,6 +3307,25 @@ function Assert-WizardConnectorHealth(
     }
 }
 
+function Assert-SetupCredentialProtectionState(
+    [string]$Launcher,
+    [string]$LogPath
+) {
+    $result = Invoke-Installed $Launcher @('credential-protection', 'status', '--json') `
+        -Timeout 120 -Log $LogPath
+    try { $status = $result.StdOut | ConvertFrom-Json -ErrorAction Stop }
+    catch { throw "credential-protection status did not emit valid JSON: $($_.Exception.Message)" }
+    $enabled = $status.PSObject.Properties['enabled']
+    if ($null -eq $enabled -or $enabled.Value -isnot [bool]) {
+        throw 'credential-protection status enabled field is missing or is not a JSON boolean'
+    }
+    $expected = -not $NoCredentialProtection.IsPresent
+    $observed = [bool]$enabled.Value
+    if ($observed -ne $expected) {
+        throw "Setup credential-protection state was $observed; expected $expected"
+    }
+}
+
 function Invoke-WizardInstall(
     [string]$Setup,
     [string]$Root,
@@ -3320,6 +3344,7 @@ function Invoke-WizardInstall(
         ActivateInstall = $true
         TimeoutSeconds = 30
         InstallTimeoutSeconds = 600
+        NoCredentialProtection = $NoCredentialProtection
     }
     $output = @(& $driver @arguments)
     Write-BoundedText $LogPath ($output -join [Environment]::NewLine)
@@ -3338,6 +3363,9 @@ function Invoke-WizardConfigureLaterAcceptance(
 ) {
     Invoke-WizardInstall $Setup $Root 'none' 'observe' $false `
         (Join-Path $Logs 'wizard-configure-later.json')
+    $launcher = Join-Path $InstallRoot 'bin\defenseclaw.exe'
+    Assert-SetupCredentialProtectionState $launcher `
+        (Join-Path $Logs 'wizard-configure-later-credential-protection.json')
     Assert-SetupInstallState $InstallRoot 'none' 'observe'
     if (-not (Test-Path -LiteralPath (Join-Path $DataRoot 'config.yaml') -PathType Leaf)) {
         throw 'Configure later did not create the canonical DefenseClaw configuration'
@@ -3404,6 +3432,8 @@ function Invoke-WizardConnectorAcceptance(
             throw "wizard install did not create required file: $required"
         }
     }
+    Assert-SetupCredentialProtectionState $launcher `
+        (Join-Path $Logs "wizard-$ConnectorName-credential-protection.json")
     Assert-SetupInstallState $InstallRoot $ConnectorName $Mode
     Assert-GatewayAutoStart $gateway
     $beforeState = Get-PackagedConnectorState $python `
@@ -3516,6 +3546,9 @@ function Invoke-SetupAcceptance {
     if (-not $requireSignedProduct -and $setupAuthenticode.Status -ne 'NotSigned') {
         throw "setup Authenticode status is neither Valid nor NotSigned: $($setupAuthenticode.Status)"
     }
+    if ($NoCredentialProtection -and $setupAuthenticode.Status -ne 'NotSigned') {
+        throw '-NoCredentialProtection is restricted to an unsigned source-only Setup artifact'
+    }
     $logs = Join-Path $root 'logs'
     [IO.Directory]::CreateDirectory($logs) | Out-Null
     $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
@@ -3597,10 +3630,13 @@ function Invoke-SetupAcceptance {
             $env:PATH = $processPathBefore
         }
 
-        Invoke-WindowsSetupStandardUserProcess $setup @(
+        $setupInstallArguments = @(
             '/quiet', '/norestart', 'INSTALLSCOPE=user', 'CONNECTOR=none',
             'MODE=observe', 'STARTGATEWAY=0'
-        ) -TimeoutSeconds 1200 -LogPath (Join-Path $logs 'setup-install.log') | Out-Null
+        )
+        if ($NoCredentialProtection) { $setupInstallArguments += 'CREDENTIALPROTECTION=0' }
+        Invoke-WindowsSetupStandardUserProcess $setup $setupInstallArguments `
+            -TimeoutSeconds 1200 -LogPath (Join-Path $logs 'setup-install.log') | Out-Null
         Assert-NoGatewayAutoStart
         $managedBin = Join-Path $installRoot 'bin'
         $persistedUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -3622,6 +3658,8 @@ function Invoke-SetupAcceptance {
                 throw "setup install did not create required file: $required"
             }
         }
+        Assert-SetupCredentialProtectionState $launcher `
+            (Join-Path $logs 'setup-credential-protection.json')
         foreach ($resourceContract in @(
             [pscustomobject]@{ Path = $launcher; Component = 'launcher' },
             [pscustomobject]@{ Path = $startup; Component = 'startup' },
@@ -3980,10 +4018,15 @@ assert set(((document.get("guardrail") or {}).get("connectors") or {})) == {"amp
             throw "setup uninstall left the managed gateway listener on port $gatewayAcceptancePort"
         }
 
-        Invoke-WindowsSetupStandardUserProcess $setup @(
+        $setupReinstallArguments = @(
             '/quiet', '/norestart', 'INSTALLSCOPE=user', 'CONNECTOR=none',
             'MODE=observe', 'STARTGATEWAY=0'
-        ) -TimeoutSeconds 1200 -LogPath (Join-Path $logs 'setup-reinstall.log') | Out-Null
+        )
+        if ($NoCredentialProtection) { $setupReinstallArguments += 'CREDENTIALPROTECTION=0' }
+        Invoke-WindowsSetupStandardUserProcess $setup $setupReinstallArguments `
+            -TimeoutSeconds 1200 -LogPath (Join-Path $logs 'setup-reinstall.log') | Out-Null
+        Assert-SetupCredentialProtectionState $launcher `
+            (Join-Path $logs 'setup-reinstall-credential-protection.json')
         $cachedSetup = Join-Path $cacheRoot 'DefenseClawSetup-x64.exe'
         if (-not (Test-Path -LiteralPath $cachedSetup -PathType Leaf)) {
             throw "reinstall did not publish the self-servicing setup executable: $cachedSetup"
@@ -5530,6 +5573,10 @@ function Invoke-Contract {
     if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) {
         throw "native setup executable not found: $setup"
     }
+    $setupAuthenticode = Get-CiscoAuthenticodeState $setup
+    if ($NoCredentialProtection -and $setupAuthenticode.Status -ne 'NotSigned') {
+        throw '-NoCredentialProtection is restricted to an unsigned source-only Setup artifact'
+    }
     $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
     $realProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
     $installRoot = Join-Path $localAppData 'Programs\DefenseClaw'
@@ -5620,10 +5667,13 @@ function Invoke-Contract {
         # The connector contract consumes the same offline native Setup
         # artifact shipped to users. The legacy install.ps1/uv/wheel
         # materializer is intentionally absent from this release gate.
-        Invoke-WindowsSetupStandardUserProcess $setup @(
+        $contractSetupArguments = @(
             '/quiet', '/norestart', 'INSTALLSCOPE=user', 'CONNECTOR=none',
             'MODE=observe', 'STARTGATEWAY=0'
-        ) -TimeoutSeconds 1200 -LogPath (Join-Path $root 'setup-contract-install.log') | Out-Null
+        )
+        if ($NoCredentialProtection) { $contractSetupArguments += 'CREDENTIALPROTECTION=0' }
+        Invoke-WindowsSetupStandardUserProcess $setup $contractSetupArguments `
+            -TimeoutSeconds 1200 -LogPath (Join-Path $root 'setup-contract-install.log') | Out-Null
         $installed = $true
         $managedBin = Join-Path $installRoot 'bin'
         $managedPython = Join-Path $installRoot 'runtime\python'
@@ -5633,6 +5683,8 @@ function Invoke-Contract {
                 throw "native Setup contract is missing installed artifact: $required"
             }
         }
+        Assert-SetupCredentialProtectionState $launcher `
+            (Join-Path $root 'setup-contract-credential-protection.json')
         Assert-ManagedDistributionIntegrity (Join-Path $managedPython 'python.exe') $managedPython
 
         if ((Test-Path -LiteralPath $defaultCodexHome) -or

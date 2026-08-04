@@ -400,6 +400,7 @@ jobs:
           -StateRoot $env:DC_STATE_ROOT
           -ArtifactRoot $env:DC_ARTIFACT_ROOT
           -DiagnosticsRoot $env:DC_DIAGNOSTICS
+          -NoCredentialProtection
           -TimeoutSeconds 4200
       - name: Capture bounded redacted diagnostics
         if: ${{ failure() || cancelled() }}
@@ -658,6 +659,7 @@ jobs:
           -StateRoot $env:DC_STATE_ROOT
           -ArtifactRoot $env:DC_ARTIFACT_ROOT
           -DiagnosticsRoot $env:DC_DIAGNOSTICS
+          -NoCredentialProtection
           -TimeoutSeconds 1800
       - name: Upload deterministic contract results
         if: ${{ always() }}

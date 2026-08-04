@@ -28,6 +28,7 @@ SMOKE_PATH = ROOT / ".github" / "workflows" / "release-candidate-smoke.yml"
 WINDOWS_NATIVE_PATH = ROOT / ".github" / "workflows" / "windows-native.yml"
 FRESH_INSTALL = (ROOT / "scripts" / "test-fresh-install-release-windows.ps1").read_text(encoding="utf-8")
 DISPOSABLE_LAUNCHER = (ROOT / "scripts" / "invoke-windows-setup-standard-user-ci.ps1").read_text(encoding="utf-8")
+WINDOWS_WIZARD = (ROOT / "scripts" / "test-windows-setup-wizard.ps1").read_text(encoding="utf-8")
 STANDARD_USER_PROCESS_LAUNCHER = (ROOT / "scripts" / "windows-disposable-standard-user-launcher.cs").read_text(
     encoding="utf-8"
 )
@@ -402,6 +403,39 @@ def test_release_accepts_signed_or_explicitly_unverified_setup_and_exact_four_si
         "windows-installer-output/DefenseClawSetup-x64.exe.sbom.json\n"
     )
     assert ".certification.json" not in rendered
+
+
+def test_source_windows_setup_ci_opts_out_without_weakening_release_acceptance() -> None:
+    native_jobs = _workflow(WINDOWS_NATIVE_PATH)["jobs"]
+    packaged = _step(
+        native_jobs["packaged-acceptance"], "Native Setup EXE install, CLI/TUI smoke, repair, and uninstall"
+    )
+    connector = _step(
+        native_jobs["connector-contract"],
+        "Required setup, allow/block, audit, telemetry, timeout, and teardown contract",
+    )
+    release_acceptance = _step(
+        _workflow(RELEASE_PATH)["jobs"]["windows-installer"],
+        "Validate the exact installer lifecycle",
+    )
+
+    assert "-NoCredentialProtection" in packaged["run"]
+    assert "-NoCredentialProtection" in connector["run"]
+    assert "-NoCredentialProtection" not in release_acceptance["run"]
+    assert "[switch]$NoCredentialProtection" in DISPOSABLE_LAUNCHER
+    assert DISPOSABLE_LAUNCHER.count("-NoCredentialProtection:$NoCredentialProtection") == 2
+    assert "$arguments += '-NoCredentialProtection'" in DISPOSABLE_LAUNCHER
+    assert "[switch]$NoCredentialProtection" in HARNESS
+    assert HARNESS.count("'CREDENTIALPROTECTION=0'") == 3
+    assert "Assert-SetupCredentialProtectionState" in HARNESS
+    assert "$enabled.Value -isnot [bool]" in HARNESS
+    assert "$expected = -not $NoCredentialProtection.IsPresent" in HARNESS
+    assert HARNESS.count("restricted to an unsigned source-only Setup artifact") == 2
+    assert "Get-AuthenticodeSignature -LiteralPath $setupSource" in DISPOSABLE_LAUNCHER
+    assert "restricted to an unsigned source-only Setup artifact" in DISPOSABLE_LAUNCHER
+    assert "[switch]$NoCredentialProtection" in WINDOWS_WIZARD
+    assert "Get-WizardControl $window 1005 'credential-protection'" in WINDOWS_WIZARD
+    assert "(-not $NoCredentialProtection.IsPresent) 'Credential-protection'" in WINDOWS_WIZARD
 
 
 def test_windows_setup_bytes_are_bound_into_the_single_sealed_candidate() -> None:
@@ -854,7 +888,7 @@ def test_amp_windows_live_prompts_invoke_native_pwsh_explicitly() -> None:
     assert result_gate is not None
     assert live_run is not None
     assert "(Get-Process -Id $PID).Path.Replace('\\', '/')" in helper.group(0)
-    assert '-NoLogo -NoProfile -NonInteractive -Command' in helper.group(0)
+    assert "-NoLogo -NoProfile -NonInteractive -Command" in helper.group(0)
     assert "cannot contain double quotes" in helper.group(0)
     assert "Get-AmpWindowsPowerShellToolCommand(" in result_gate.group(0)
     assert result_gate.group(0).count("Get-Content -Raw -LiteralPath") == 1
