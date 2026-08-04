@@ -73,7 +73,10 @@ def _wheel_entries(path: Path) -> tuple[dict[str, bytes], str]:
 def _write_wheel(path: Path, entries: dict[str, bytes], dist_info: str) -> None:
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, payload in sorted(_with_wheel_record(entries, dist_info).items()):
-            archive.writestr(name, payload)
+            info = zipfile.ZipInfo(name)
+            # ZipInfo rewrites backslashes on Windows unless the literal test name is restored.
+            info.filename = name
+            archive.writestr(info, payload, compress_type=zipfile.ZIP_DEFLATED)
 
 
 def test_sgw_release_generators_and_sbom_tests_are_certification_sensitive() -> None:
