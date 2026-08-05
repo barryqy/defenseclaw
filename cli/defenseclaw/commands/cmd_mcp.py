@@ -36,6 +36,7 @@ import shutil
 import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
 import click
 
@@ -44,6 +45,9 @@ from defenseclaw.commands import compute_verdict as _compute_verdict
 from defenseclaw.config import MCPServerEntry
 from defenseclaw.context import AppContext, pass_ctx
 from defenseclaw.models import ActionEntry, ActionState, ScanResult
+
+if TYPE_CHECKING:
+    from defenseclaw.scanner.rulepack import RulePackOverlayCache
 
 
 def _parse_args(raw: str) -> list[str]:
@@ -561,6 +565,7 @@ def _run_scan(
     connector: str = "",
     json_error_sink: list[dict] | None = None,
     audit_target: str = "",
+    pack_cache: RulePackOverlayCache | None = None,
 ) -> ScanResult | None:
     """Run the MCP scanner on *target*.  Returns None on fatal error."""
     from dataclasses import replace
@@ -593,8 +598,12 @@ def _run_scan(
     # (command/args/env/url). No-op when no rule_pack_dir is set.
     from defenseclaw.scanner.rulepack import maybe_wrap
 
-    scanner = maybe_wrap(scanner, app.cfg)
-
+    scanner = maybe_wrap(
+        scanner,
+        app.cfg,
+        connector or None,
+        pack_cache=pack_cache,
+    )
     # NOTE: pre-S6.4 this printed "Scanning MCP server: <target>"; the
     # new shared scan UX renders that information once via
     # ``_scan_ui.render_preamble`` + a per-target glyph line, so we
@@ -838,6 +847,7 @@ def _scan_all_mcp(
     as_json: bool,
     allow_private: bool = False,
     error_count_sink: list[int] | None = None,
+    pack_cache: RulePackOverlayCache | None = None,
 ) -> list[dict]:
     """Scan every MCP server registered for ``connector``.
 
@@ -848,6 +858,9 @@ def _scan_all_mcp(
 
     from defenseclaw.commands import _scan_ui
     from defenseclaw.enforce import PolicyEngine
+
+    if pack_cache is None:
+        pack_cache = {}
 
     servers = app.cfg.mcp_servers(connector)
     if not servers:
@@ -908,6 +921,7 @@ def _scan_all_mcp(
             connector=connector,
             json_error_sink=json_errors if as_json else None,
             audit_target=_mcp_scoped_scan_target(connector, s.name),
+            pack_cache=pack_cache,
         )
         if result is None:
             errored += 1
@@ -1060,6 +1074,7 @@ def _scan_one_resolved(
     allow_private: bool,
     pe,
     emit_hints: bool,
+    pack_cache: RulePackOverlayCache | None = None,
 ) -> str:
     """Resolve, block-check, and scan a single name/URL within one connector.
 
@@ -1108,6 +1123,7 @@ def _scan_one_resolved(
         allow_private=allow_private,
         connector=connector,
         audit_target=_mcp_scoped_scan_target(connector, entry.name) if entry else "",
+        pack_cache=pack_cache,
     )
     if result is None:
         return "error"
@@ -1219,6 +1235,8 @@ def scan(
     )
     from defenseclaw.enforce import PolicyEngine
 
+    pack_cache: RulePackOverlayCache = {}
+
     if scan_all:
         # An explicit --connector targets exactly one connector; otherwise a
         # no-flag scan uses the plural resolver so a zero-connector config exits
@@ -1239,6 +1257,7 @@ def scan(
                 as_json,
                 allow_private=allow_private,
                 error_count_sink=error_counts,
+                pack_cache=pack_cache,
             )
             if as_json:
                 json_rows.extend(rows)
@@ -1264,6 +1283,7 @@ def scan(
                 as_json,
                 allow_private=allow_private,
                 error_count_sink=error_counts,
+                pack_cache=pack_cache,
             )
             if as_json:
                 click.echo(json.dumps(rows, indent=2))
@@ -1291,6 +1311,7 @@ def scan(
         as_json=as_json,
         allow_private=allow_private,
         pe=pe,
+        pack_cache=pack_cache,
     )
 
     # An explicit --connector or a direct URL keeps the single-resolution

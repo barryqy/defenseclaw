@@ -35,6 +35,7 @@ import (
 	"testing"
 
 	"github.com/defenseclaw/defenseclaw/internal/config"
+	"github.com/defenseclaw/defenseclaw/internal/guardrail"
 	"github.com/defenseclaw/defenseclaw/internal/inventory"
 	"github.com/defenseclaw/defenseclaw/internal/observability"
 	"github.com/defenseclaw/defenseclaw/internal/version"
@@ -1063,6 +1064,7 @@ func TestAIDiscoveryRestartPredicateIncludesLiveManagedModeTransitions(t *testin
 func TestEventRouterConfigurationAccessorsAreConcurrentSafe(t *testing.T) {
 	router := &EventRouter{}
 	guardrailCfg := &config.GuardrailConfig{Connector: "codex"}
+	rulePacks := []*guardrail.RulePack{{}, {SensitiveTools: &guardrail.SensitiveToolsConfig{}}}
 	var wg sync.WaitGroup
 	for range 4 {
 		wg.Add(2)
@@ -1072,6 +1074,8 @@ func TestEventRouterConfigurationAccessorsAreConcurrentSafe(t *testing.T) {
 				router.SetGuardrailConfig(guardrailCfg)
 				router.SetDefaultAgentName("codex")
 				router.SetDefaultPolicyID("action")
+				router.SetRulePack(rulePacks[0])
+				router.SetRulePack(rulePacks[1])
 			}
 		}()
 		go func() {
@@ -1080,6 +1084,7 @@ func TestEventRouterConfigurationAccessorsAreConcurrentSafe(t *testing.T) {
 				_ = router.guardrailConfig()
 				_ = router.connectorName()
 				_, _ = router.defaultRoutingMetadata()
+				_ = router.rulePack()
 			}
 		}()
 	}

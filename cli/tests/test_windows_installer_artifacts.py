@@ -42,6 +42,7 @@ SGW_CORE_TERMS = (
 )
 SOURCE_LICENSE = (ROOT / "LICENSE").read_bytes()
 SOURCE_NOTICE = (ROOT / "NOTICE").read_bytes()
+SOURCE_THIRD_PARTY = (ROOT / "THIRD_PARTY_LICENSES.txt").read_bytes()
 
 
 def test_helper_direct_execution_ignores_unrelated_scripts_package(tmp_path: Path) -> None:
@@ -393,7 +394,7 @@ def _fixture(tmp_path: Path) -> argparse.Namespace:
                 "defenseclaw",
                 version,
                 license_expression=artifacts.SGW_MIXED_LICENSE,
-                license_files=("LICENSE", "NOTICE"),
+                license_files=("LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.txt"),
             ),
             f"{defense_metadata}/WHEEL": artifacts.stage_sgw_modules.EXPECTED_WHEEL_METADATA,
             f"{defense_metadata}/entry_points.txt": artifacts.stage_sgw_modules.EXPECTED_ENTRY_POINTS,
@@ -401,6 +402,7 @@ def _fixture(tmp_path: Path) -> argparse.Namespace:
             f"{defense_metadata}/licenses/NOTICE": artifacts.stage_sgw_modules.production_notice(
                 SOURCE_NOTICE, SGW_CORE_TERMS
             ),
+            f"{defense_metadata}/licenses/THIRD_PARTY_LICENSES.txt": SOURCE_THIRD_PARTY,
         },
         defense_metadata,
     )
@@ -434,17 +436,19 @@ def _fixture(tmp_path: Path) -> argparse.Namespace:
             version,
             "yara-python>=4.5.4",
             license_expression=artifacts.SGW_MIXED_LICENSE,
-            license_files=("LICENSE", "NOTICE"),
+            license_files=("LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.txt"),
         ),
         f"{defense_metadata}/licenses/LICENSE": SOURCE_LICENSE,
         f"{defense_metadata}/licenses/NOTICE": artifacts.stage_sgw_modules.production_notice(
             SOURCE_NOTICE, SGW_CORE_TERMS
         ),
+        f"{defense_metadata}/licenses/THIRD_PARTY_LICENSES.txt": SOURCE_THIRD_PARTY,
         f"{defense_metadata}/RECORD": (
             f"defenseclaw/__init__.py,,\n"
             f"{defense_metadata}/METADATA,,\n"
             f"{defense_metadata}/licenses/LICENSE,,\n"
             f"{defense_metadata}/licenses/NOTICE,,\n"
+            f"{defense_metadata}/licenses/THIRD_PARTY_LICENSES.txt,,\n"
             f"{defense_metadata}/RECORD,,\n"
         ).encode(),
         "yara/__init__.py": b"# compat\n",

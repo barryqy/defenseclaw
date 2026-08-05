@@ -162,6 +162,7 @@ def isolated_build_source(tmp_path: Path) -> Path:
         "MANIFEST.in",
         "NOTICE",
         "README.md",
+        "THIRD_PARTY_LICENSES.txt",
         "defenseclaw_build_backend.py",
         "pyproject.toml",
         "setup.py",
@@ -671,7 +672,7 @@ def test_isolated_pep517_sdist_excludes_staged_modules_and_wheel_restages_them(
             sdist_metadata = BytesParser(policy=policy.default).parsebytes(archive.extractfile(metadata_name).read())
             assert sdist_metadata.get_all("License-Expression") == ["Apache-2.0"]
             assert "license-expression" in [value.lower() for value in sdist_metadata.get_all("Dynamic", [])]
-            assert sorted(sdist_metadata.get_all("License-File", [])) == ["LICENSE", "NOTICE"]
+            assert sorted(sdist_metadata.get_all("License-File", [])) == stage_sgw_modules.WHEEL_LICENSE_FILES
         notice_members = [name for name in members if name.count("/") == 1 and name.endswith("/NOTICE")]
         assert len(notice_members) == 1
         assert archive.extractfile(notice_members[0]).read() == (ROOT / "NOTICE").read_bytes()
@@ -709,9 +710,12 @@ def test_isolated_pep517_sdist_excludes_staged_modules_and_wheel_restages_them(
         source_dynamic = [value.lower() for value in source_metadata.get_all("Dynamic", [])]
         assert "license-expression" in source_dynamic
         assert "license-file" in source_dynamic
-        assert sorted(source_metadata.get_all("License-File", [])) == ["LICENSE", "NOTICE"]
+        assert sorted(source_metadata.get_all("License-File", [])) == stage_sgw_modules.WHEEL_LICENSE_FILES
         dist_info = PurePosixPath(metadata_names[0]).parent
         assert archive.read(f"{dist_info}/licenses/NOTICE") == (ROOT / "NOTICE").read_bytes()
+        assert archive.read(f"{dist_info}/licenses/THIRD_PARTY_LICENSES.txt") == (
+            ROOT / "THIRD_PARTY_LICENSES.txt"
+        ).read_bytes()
 
     output = tmp_path / "wheel"
     result = subprocess.run(
@@ -744,11 +748,14 @@ def test_isolated_pep517_sdist_excludes_staged_modules_and_wheel_restages_them(
         dynamic = [value.lower() for value in metadata.get_all("Dynamic", [])]
         assert "license-expression" in dynamic
         assert "license-file" in dynamic
-        assert sorted(metadata.get_all("License-File", [])) == ["LICENSE", "NOTICE"]
+        assert sorted(metadata.get_all("License-File", [])) == stage_sgw_modules.WHEEL_LICENSE_FILES
         dist_info = PurePosixPath(metadata_names[0]).parent
         notice = archive.read(f"{dist_info}/licenses/NOTICE")
         assert notice.startswith((ROOT / "NOTICE").read_bytes())
         assert notice == stage_sgw_modules.production_notice((ROOT / "NOTICE").read_bytes(), CORE_LICENSE_TERMS)
+        assert archive.read(f"{dist_info}/licenses/THIRD_PARTY_LICENSES.txt") == (
+            ROOT / "THIRD_PARTY_LICENSES.txt"
+        ).read_bytes()
 
 
 def test_prepared_metadata_matches_source_production_and_editable_wheels(tmp_path: Path) -> None:

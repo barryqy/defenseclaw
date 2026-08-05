@@ -38,6 +38,14 @@ EXPECTED_SDIST_CONFIG_INPUTS = {
     "schemas/config/v8/reference/observability.md",
 }
 EXPECTED_SDIST_TELEMETRY_INPUTS = set(LOGICAL_TO_ENCODED.values())
+EXPECTED_WHEEL_LICENSE_FILES = {
+    name: ROOT / name
+    for name in (
+        "LICENSE",
+        "NOTICE",
+        "THIRD_PARTY_LICENSES.txt",
+    )
+}
 
 
 class BuiltArtifacts(NamedTuple):
@@ -100,6 +108,7 @@ def _copy_pristine_source(destination: Path) -> None:
         Path("README.md"),
         Path("LICENSE"),
         Path("NOTICE"),
+        Path("THIRD_PARTY_LICENSES.txt"),
         Path("internal/envvars/registry.json"),
         Path("release/s-gw-module.json"),
         Path("release/s-gw-runners.json"),
@@ -181,6 +190,7 @@ def _wheel_metadata_payload(newline: bytes = b"\n") -> bytes:
             b"License-Expression: Apache-2.0",
             b"License-File: LICENSE",
             b"License-File: NOTICE",
+            b"License-File: THIRD_PARTY_LICENSES.txt",
             b"",
             b"DefenseClaw package metadata.",
             b"",
@@ -353,6 +363,20 @@ def _assert_exact_v8_wheel(wheel: Path) -> None:
             assert names.count(member) == 1
             assert archive.read(member) == source
 
+        metadata_members = [name for name in names if name.endswith(".dist-info/METADATA")]
+        assert len(metadata_members) == 1
+        metadata_lines = archive.read(metadata_members[0]).decode("utf-8").splitlines()
+        assert metadata_lines.count("License-Expression: Apache-2.0") == 1
+        for source_name, source in EXPECTED_WHEEL_LICENSE_FILES.items():
+            members = [
+                name
+                for name in names
+                if name.endswith(f".dist-info/licenses/{source_name}")
+            ]
+            assert len(members) == 1
+            assert archive.read(members[0]) == source.read_bytes()
+            assert f"License-File: {source_name}" in metadata_lines
+
 
 def _extract_wheel_safely(wheel: Path, destination: Path) -> None:
     destination.mkdir()
@@ -402,6 +426,9 @@ def test_sdist_contains_exact_build_inputs_and_builds_complete_wheel(
     )
     for required in (
         "defenseclaw_build_backend.py",
+        "LICENSE",
+        "NOTICE",
+        "THIRD_PARTY_LICENSES.txt",
         "setup.py",
         "internal/envvars/registry.json",
         "release/s-gw-module.json",

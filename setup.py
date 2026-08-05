@@ -33,6 +33,7 @@ from setuptools.command.editable_wheel import editable_wheel
 BASE_LICENSE_EXPRESSION = "Apache-2.0"
 SGW_CORE_NOTICE_FILE = "NOTICE"
 SGW_MIXED_LICENSE_EXPRESSION = "Apache-2.0 AND LicenseRef-s-gw-Core"
+WHEEL_LICENSE_FILES = ["LICENSE", SGW_CORE_NOTICE_FILE, "THIRD_PARTY_LICENSES.txt"]
 
 CONFIG_SOURCE_ROOT = Path("schemas/config/v8")
 CONFIG_ASSETS = {
@@ -349,7 +350,7 @@ def _update_wheel_metadata(metadata_path: Path, contract: dict, *, allow_update:
         raise RuntimeError("wheel distribution metadata carries a legacy License field")
     expressions = metadata.get_all("License-Expression", [])
     license_files = metadata.get_all("License-File", [])
-    if sorted(license_files) != ["LICENSE", SGW_CORE_NOTICE_FILE]:
+    if sorted(license_files) != WHEEL_LICENSE_FILES:
         raise RuntimeError("wheel distribution metadata has unexpected license file headers")
 
     production = contract["production_modules"]

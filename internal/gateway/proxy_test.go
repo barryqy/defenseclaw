@@ -2078,19 +2078,20 @@ func TestScrubURLSecrets(t *testing.T) {
 		want string
 	}{
 		{"no query", "https://api.openai.com/v1/chat/completions", "https://api.openai.com/v1/chat/completions"},
-		{"gemini key", "https://generativelanguage.googleapis.com/models/gemini:generate?key=AIza1234secret", "https://generativelanguage.googleapis.com/models/gemini:generate"},
-		{"multiple params", "https://example.com/api?key=secret&alt=sse", "https://example.com/api"},
-		{"api-key param", "https://example.com?api-key=secret", "https://example.com"},
-		{"token param", "https://example.com?token=abc123", "https://example.com"},
+		{"gemini key", "https://generativelanguage.googleapis.com/models/gemini:generate?key=AIza1234secret", "https://generativelanguage.googleapis.com/models/gemini:generate?key=%3Credacted%3E"},
+		{"multiple params", "https://example.com/api?key=secret&alt=sse", "https://example.com/api?key=%3Credacted%3E&alt=sse"},
+		{"api-key param", "https://example.com?api-key=secret", "https://example.com?api-key=%3Credacted%3E"},
+		{"token param", "https://example.com?token=abc123", "https://example.com?token=%3Credacted%3E"},
+		{"encoded token param", "https://example.com?tok%65n=abc123", "https://example.com?tok%65n=%3Credacted%3E"},
+		{"no sensitive params", "https://api.openai.com?model=gpt-4", "https://api.openai.com?model=gpt-4"},
 		{"userinfo", "https://user:password@example.com/path", "https://example.com/path"},
-		{"case-insensitive token", "https://example.com?TOKEN=abc123", "https://example.com"},
-		{"arbitrary query", "https://api.openai.com/v1?model=gpt-4", "https://api.openai.com/v1"},
+		{"case-insensitive token", "https://example.com?TOKEN=abc123", "https://example.com?TOKEN=%3Credacted%3E"},
 		{"fragment", "https://example.com/path#access_token=fragment-secret", "https://example.com/path"},
 		{"trailing query marker", "https://example.com/path?", "https://example.com/path"},
-		{"userinfo query fragment", "https://user:password@example.com:8443/a%2Fb?request_id=query-secret#fragment-secret", "https://example.com:8443/a%2Fb"},
+		{"userinfo query fragment", "https://user:password@example.com:8443/a%2Fb?request_id=query-secret#fragment-secret", "https://example.com:8443/a%2Fb?request_id=%3Credacted%3E"},
 		{"empty", "", ""},
-		{"invalid url", "://bad", "[invalid URL]"},
-		{"relative credential-like value", "token=topsecret", "[invalid URL]"},
+		{"invalid url", "://bad?token=secret", "<unparseable-url>"},
+		{"relative credential-like value", "token=topsecret", "<unparseable-url>"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

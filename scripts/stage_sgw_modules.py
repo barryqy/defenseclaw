@@ -75,6 +75,7 @@ SGW_CORE_LICENSE = "LicenseRef-s-gw-Core"
 SGW_MIXED_LICENSE = f"Apache-2.0 AND {SGW_CORE_LICENSE}"
 SGW_CORE_LICENSE_BEGIN = f"----- BEGIN {SGW_CORE_LICENSE} -----"
 SGW_CORE_LICENSE_END = f"----- END {SGW_CORE_LICENSE} -----"
+WHEEL_LICENSE_FILES = ["LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.txt"]
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 DOS_DEVICE_RE = re.compile(
@@ -1155,6 +1156,11 @@ def _validate_wheel_license_metadata(wheel: Path, *, version: str, core_terms: s
         label="source NOTICE",
         max_bytes=MAX_SOURCE_LICENSE_BYTES,
     )
+    source_third_party = regular_file(
+        ROOT / "THIRD_PARTY_LICENSES.txt",
+        label="source THIRD_PARTY_LICENSES.txt",
+        max_bytes=MAX_SOURCE_LICENSE_BYTES,
+    )
     expected_payload = production_notice(base_notice, core_terms)
     try:
         with zipfile.ZipFile(wheel) as archive:
@@ -1202,7 +1208,7 @@ def _validate_wheel_license_metadata(wheel: Path, *, version: str, core_terms: s
             if expressions != [SGW_MIXED_LICENSE]:
                 raise DeliveryError("DefenseClaw production wheel license expression is inconsistent")
             license_files = metadata.get_all("License-File", [])
-            if sorted(license_files) != ["LICENSE", "NOTICE"]:
+            if sorted(license_files) != WHEEL_LICENSE_FILES:
                 raise DeliveryError("DefenseClaw production wheel license file headers are inconsistent")
 
             dist_info = PurePosixPath(metadata_name).parent
@@ -1213,7 +1219,8 @@ def _validate_wheel_license_metadata(wheel: Path, *, version: str, core_terms: s
             )
             license_member = f"{dist_info.as_posix()}/licenses/LICENSE"
             license_name = f"{dist_info.as_posix()}/licenses/NOTICE"
-            if names.count(license_member) != 1 or names.count(license_name) != 1:
+            third_party_name = f"{dist_info.as_posix()}/licenses/THIRD_PARTY_LICENSES.txt"
+            if any(names.count(name) != 1 for name in (license_member, license_name, third_party_name)):
                 raise DeliveryError("DefenseClaw production wheel lacks its exact license files")
             source_license = regular_file(
                 ROOT / "LICENSE",
@@ -1238,6 +1245,14 @@ def _validate_wheel_license_metadata(wheel: Path, *, version: str, core_terms: s
                 raise DeliveryError(
                     "DefenseClaw production wheel NOTICE differs from source or authenticated s-gw Core terms"
                 )
+            third_party_info = archive.getinfo(third_party_name)
+            if not _wheel_member_is_regular(third_party_info) or third_party_info.file_size != len(source_third_party):
+                raise DeliveryError("DefenseClaw production wheel THIRD_PARTY_LICENSES.txt file is unsafe")
+            third_party_payload = archive.read(third_party_info)
+            if third_party_payload != source_third_party:
+                raise DeliveryError(
+                    "DefenseClaw production wheel THIRD_PARTY_LICENSES.txt differs from the source"
+                )
             _validate_recorded_wheel_members(
                 archive,
                 dist_info=dist_info,
@@ -1245,6 +1260,7 @@ def _validate_wheel_license_metadata(wheel: Path, *, version: str, core_terms: s
                     metadata_name: metadata_payload,
                     license_member: license_payload,
                     license_name: payload,
+                    third_party_name: third_party_payload,
                     **operational_metadata,
                 },
                 require_complete=True,
@@ -1265,6 +1281,11 @@ def validate_source_only_wheel(wheel: Path, *, version: str) -> dict[str, Any]:
     source_notice = regular_file(
         ROOT / "NOTICE",
         label="source NOTICE",
+        max_bytes=MAX_SOURCE_LICENSE_BYTES,
+    )
+    source_third_party = regular_file(
+        ROOT / "THIRD_PARTY_LICENSES.txt",
+        label="source THIRD_PARTY_LICENSES.txt",
         max_bytes=MAX_SOURCE_LICENSE_BYTES,
     )
     expected_payloads = {
@@ -1357,7 +1378,7 @@ def validate_source_only_wheel(wheel: Path, *, version: str) -> dict[str, Any]:
                 raise DeliveryError("DefenseClaw source-only wheel carries legacy License metadata")
             if metadata.get_all("License-Expression", []) != ["Apache-2.0"]:
                 raise DeliveryError("DefenseClaw source-only wheel license expression is inconsistent")
-            if sorted(metadata.get_all("License-File", [])) != ["LICENSE", "NOTICE"]:
+            if sorted(metadata.get_all("License-File", [])) != WHEEL_LICENSE_FILES:
                 raise DeliveryError("DefenseClaw source-only wheel license file headers are inconsistent")
 
             dist_info = PurePosixPath(metadata_name).parent
@@ -1370,9 +1391,15 @@ def validate_source_only_wheel(wheel: Path, *, version: str) -> dict[str, Any]:
             )
             license_name = f"{dist_info.as_posix()}/licenses/LICENSE"
             notice_name = f"{dist_info.as_posix()}/licenses/NOTICE"
-            if names.count(license_name) != 1 or names.count(notice_name) != 1:
+            third_party_name = f"{dist_info.as_posix()}/licenses/THIRD_PARTY_LICENSES.txt"
+            license_payloads = (
+                (license_name, source_license),
+                (notice_name, source_notice),
+                (third_party_name, source_third_party),
+            )
+            if any(names.count(name) != 1 for name, _ in license_payloads):
                 raise DeliveryError("DefenseClaw source-only wheel lacks its exact license files")
-            for name, expected in ((license_name, source_license), (notice_name, source_notice)):
+            for name, expected in license_payloads:
                 info = archive.getinfo(name)
                 if not _wheel_member_is_regular(info) or info.file_size != len(expected):
                     raise DeliveryError(f"DefenseClaw source-only wheel {PurePosixPath(name).name} file is unsafe")

@@ -41,6 +41,7 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 	"golang.org/x/time/rate"
 
+	"github.com/defenseclaw/defenseclaw/internal/actionfacts"
 	"github.com/defenseclaw/defenseclaw/internal/audit"
 	"github.com/defenseclaw/defenseclaw/internal/config"
 	"github.com/defenseclaw/defenseclaw/internal/configs"
@@ -48,6 +49,7 @@ import (
 	"github.com/defenseclaw/defenseclaw/internal/gateway/notifier"
 	"github.com/defenseclaw/defenseclaw/internal/gatewaylog"
 	"github.com/defenseclaw/defenseclaw/internal/guardrail"
+	"github.com/defenseclaw/defenseclaw/internal/netguard"
 	"github.com/defenseclaw/defenseclaw/internal/observability"
 	"github.com/defenseclaw/defenseclaw/internal/redaction"
 	"github.com/google/uuid"
@@ -4262,22 +4264,20 @@ func redactAuthValue(val string) string {
 	return "[set]"
 }
 
-// scrubURLSecrets keeps only the useful routing parts of a URL for logging.
-// Invalid values are never echoed back to the operational log.
+// scrubURLSecrets returns an absolute URL safe for diagnostics. It never
+// changes the URL used for the upstream request.
 func scrubURLSecrets(raw string) string {
 	if raw == "" {
 		return ""
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Hostname() == "" {
-		return "[invalid URL]"
+		return "<unparseable-url>"
 	}
-	u.User = nil
-	u.RawQuery = ""
 	u.ForceQuery = false
 	u.Fragment = ""
 	u.RawFragment = ""
-	return u.String()
+	return netguard.ScrubURL(u, "request_id")
 }
 
 // isOllamaLoopback returns true when targetURL points at a loopback
@@ -4915,7 +4915,15 @@ func (p *GuardrailProxy) inspectToolCalls(ctx context.Context, toolCallsJSON jso
 		toolName := tc.Function.Name
 		args := tc.Function.Arguments
 
-		findings := ScanAllRules(args, toolName)
+		findings := dispatchTrustedAction(ctx, trustedActionRequest{
+			Input: actionfacts.Input{
+				Tool: toolName,
+				Args: json.RawMessage(args),
+			},
+			LegacyText:         args,
+			Connector:          p.connectorName(),
+			EnforcementCapable: true,
+		})
 		// Stamp the tool's capability class (read_fs / exec_shell /
 		// network_fetch / …) onto each finding from this call so the
 		// sliding-window correlator can reason about capability
@@ -4939,7 +4947,15 @@ func (p *GuardrailProxy) inspectToolCalls(ctx context.Context, toolCallsJSON jso
 	severity := HighestSeverity(allFindings)
 	confidence := HighestConfidence(allFindings, severity)
 
-	action := guardrailRuntimeActionForGuardrail(p.cfg, severity, false)
+	enforceable := enforceableRuleFindings(allFindings)
+	action := guardrailActionAlert
+	if len(enforceable) > 0 {
+		action = guardrailRuntimeActionForGuardrail(
+			p.cfg,
+			HighestSeverity(enforceable),
+			false,
+		)
+	}
 	if action == guardrailActionAllow {
 		return nil
 	}

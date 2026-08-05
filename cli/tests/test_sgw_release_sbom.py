@@ -45,12 +45,13 @@ def _source_only_wheel(tmp_path: Path, version: str = "0.8.11") -> Path:
             f"{dist_info}/METADATA": _metadata(
                 "defenseclaw",
                 version,
-                license_files=("LICENSE", "NOTICE"),
+                license_files=("LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.txt"),
             ),
             f"{dist_info}/WHEEL": stage_sgw_modules.EXPECTED_WHEEL_METADATA,
             f"{dist_info}/entry_points.txt": stage_sgw_modules.EXPECTED_ENTRY_POINTS,
             f"{dist_info}/licenses/LICENSE": (root / "LICENSE").read_bytes(),
             f"{dist_info}/licenses/NOTICE": (root / "NOTICE").read_bytes(),
+            f"{dist_info}/licenses/THIRD_PARTY_LICENSES.txt": (root / "THIRD_PARTY_LICENSES.txt").read_bytes(),
         },
         dist_info,
     )
@@ -535,7 +536,7 @@ def test_wheel_license_validator_rejects_missing_or_tampered_license(tmp_path: P
 
 
 @pytest.mark.parametrize("record_change", ["missing", "corrupt"])
-@pytest.mark.parametrize("member_kind", ["METADATA", "LICENSE", "NOTICE"])
+@pytest.mark.parametrize("member_kind", ["METADATA", "LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.txt"])
 def test_wheel_license_validator_rejects_bad_record_rows(
     tmp_path: Path,
     record_change: str,
@@ -552,6 +553,7 @@ def test_wheel_license_validator_rejects_bad_record_rows(
             "METADATA": metadata_name,
             "LICENSE": f"{dist_info}/licenses/LICENSE",
             "NOTICE": f"{dist_info}/licenses/NOTICE",
+            "THIRD_PARTY_LICENSES.txt": f"{dist_info}/licenses/THIRD_PARTY_LICENSES.txt",
         }[member_kind]
         record_name = f"{dist_info}/RECORD"
         with zipfile.ZipFile(tampered, "w") as output:

@@ -868,8 +868,8 @@ class PerConnectorFailModeTests(unittest.TestCase):
             )
         self.assertEqual(result.exit_code, 0, msg=result.output)
         self.assertNotIn("nothing to do", result.output)
-        self.assertIn("closed → open", result.output)
-        self.assertNotIn("open → open", result.output)
+        self.assertRegex(result.output, r"closed (?:→|->) open")
+        self.assertNotRegex(result.output, r"open (?:→|->) open")
         self.assertEqual(app.cfg.guardrail.connectors["codex"].hook_fail_mode, "open")
         app.cfg.save.assert_called_once()
 
@@ -1272,6 +1272,8 @@ class CommandRegistrationTests(unittest.TestCase):
         # list-packs is the read-only listing surface for guardrail rule
         # packs (built-in presets + the dir each connector enforces) — the
         # day-to-day counterpart to `setup <connector> --rule-pack` (R2).
+        # validate-pack delegates strict offline validation to the installed
+        # gateway helper without starting the runtime.
         # Keep this assertion exact so accidental command removal
         # (e.g. a careless `del`) is caught immediately.
         self.assertEqual(
@@ -1285,6 +1287,7 @@ class CommandRegistrationTests(unittest.TestCase):
                 "block-message",
                 "judge",
                 "list-packs",
+                "validate-pack",
             },
         )
 

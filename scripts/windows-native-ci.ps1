@@ -1365,6 +1365,7 @@ function Copy-PackageBuildInputs([string]$Destination) {
         'README.md',
         'LICENSE',
         'NOTICE',
+        'THIRD_PARTY_LICENSES.txt',
         'MANIFEST.in',
         'internal\envvars\registry.json',
         'release\s-gw-module.json',
@@ -1478,6 +1479,11 @@ function Invoke-BuildArtifacts {
         if ($null -eq $previousCgo) { Remove-Item Env:CGO_ENABLED -ErrorAction SilentlyContinue }
         else { $env:CGO_ENABLED = $previousCgo }
     }
+    foreach ($file in @('LICENSE', 'NOTICE', 'THIRD_PARTY_LICENSES.txt')) {
+        foreach ($targetRoot in @($gatewayVerificationStage, $stage)) {
+            Copy-Item -LiteralPath (Join-Path $WorkspaceRoot $file) -Destination $targetRoot -Force
+        }
+    }
     $gatewayArchive = Join-Path $dist "defenseclaw_${packageVersion}_windows_amd64.zip"
     $gatewayArchiveVerification = Join-Path $root 'gateway-archive-verification.zip'
     Invoke-WindowsNativeProcess $uv @(
@@ -1488,13 +1494,42 @@ function Invoke-BuildArtifacts {
     ) -TimeoutSeconds 900 -WorkingDirectory $WorkspaceRoot | Out-Null
     Invoke-WindowsNativeProcess $uv @(
         'run', '--frozen', 'python', $artifactHelper, 'zip',
-        '--source', $stage,
+        '--source', $gatewayVerificationStage,
         '--output', $gatewayArchiveVerification,
         '--epoch', $sourceDateEpoch
     ) -TimeoutSeconds 900 -WorkingDirectory $WorkspaceRoot | Out-Null
     if ((Get-FileHash -LiteralPath $gatewayArchive -Algorithm SHA256).Hash -ne
         (Get-FileHash -LiteralPath $gatewayArchiveVerification -Algorithm SHA256).Hash) {
         throw 'deterministic gateway ZIP self-check failed'
+    }
+    $gatewayLicenseArchive = [IO.Compression.ZipFile]::OpenRead($gatewayArchive)
+    try {
+        foreach ($file in @('LICENSE', 'NOTICE', 'THIRD_PARTY_LICENSES.txt')) {
+            $matches = @(
+                $gatewayLicenseArchive.Entries |
+                    Where-Object { $_.FullName.Replace('\', '/') -eq $file }
+            )
+            if ($matches.Count -ne 1) {
+                throw "gateway ZIP must contain exactly one root $file file"
+            }
+            $entryStream = $matches[0].Open()
+            $entryBuffer = [IO.MemoryStream]::new()
+            try {
+                $entryStream.CopyTo($entryBuffer)
+                $archived = [Convert]::ToBase64String($entryBuffer.ToArray())
+            } finally {
+                $entryBuffer.Dispose()
+                $entryStream.Dispose()
+            }
+            $canonical = [Convert]::ToBase64String(
+                [IO.File]::ReadAllBytes((Join-Path $WorkspaceRoot $file))
+            )
+            if ($archived -ne $canonical) {
+                throw "gateway ZIP $file differs from the canonical source file"
+            }
+        }
+    } finally {
+        $gatewayLicenseArchive.Dispose()
     }
 
     $packageStage = Join-Path $root 'package-source'
