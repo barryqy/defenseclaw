@@ -5,15 +5,17 @@
   "package_version": "0.2.0",
   "upstream_package_version": "0.1.19",
   "upstream_repository": "https://github.com/sgateway/s-gw.git",
-  "upstream_revision": "47aae064da2aae4114d1dac1208936ac102457fa",
-  "upstream_tree": "855069e2612b4e30a13886b00f3035f863847829",
+  "upstream_revision": "b4771cc55d744579db8db5e0273b7524669bec88",
+  "upstream_tree": "19246be282f6082d11ee74447f3aebecb699f347",
   "source_path": "third_party/s-gw/upstream",
   "source_inventory": "third_party/s-gw/SOURCE_MANIFEST.json",
   "patches": [
     "third_party/s-gw/patches/0001-defenseclaw-native-runtime-boundary.patch",
     "third_party/s-gw/patches/0002-defenseclaw-native-authorization-hardening.patch",
     "third_party/s-gw/patches/0003-defenseclaw-setup-help.patch",
-    "third_party/s-gw/patches/0004-defenseclaw-windows-launch-trust.patch"
+    "third_party/s-gw/patches/0004-defenseclaw-windows-launch-trust.patch",
+    "third_party/s-gw/patches/0005-defenseclaw-credential-status.patch",
+    "third_party/s-gw/patches/0006-defenseclaw-standalone-parity.patch"
   ],
   "source_selection": {
     "files": [

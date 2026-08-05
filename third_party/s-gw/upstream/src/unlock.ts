@@ -20,6 +20,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getSgwHome, MASTER_KEYCHAIN_SERVICE, SECRET_KEYCHAIN_SERVICE } from "./paths.js";
 import { resolveSelfContainedMacRuntime } from "./self-contained-runtime.js";
+import { trustedWindowsPowerShellSync, windowsSystemEnvironment } from "./windows-system.js";
 
 const nativeHelperName = "s-gw-keychain-helper";
 const nativeInspectorName = "s-gw-keychain-inspector";
@@ -141,15 +142,33 @@ export function setKeychainPassphrase(passphrase: string): void {
 export function deleteKeychainPassphrase(): boolean {
   ensureLocalCredentialStore();
   preparePersistentMacHelper();
-  try {
-    if (managedMacKeychainAccessEnabled()) {
-      return deleteManagedMacKeychainItem(masterPassphraseRef());
-    }
-    runKeychainDelete(keychainInfo());
-    return true;
-  } catch {
+  if (managedMacKeychainAccessEnabled()) {
+    return deleteManagedMacKeychainItem(masterPassphraseRef());
+  }
+
+  const info = keychainInfo();
+  if (!keychainItemExists(info)) {
     return false;
   }
+  if (info.provider === "windows-helper" && info.helperPath) {
+    const output = runWindowsCredentialHelper(
+      info.helperPath,
+      ["delete", "-Service", info.service, "-Account", info.account]
+    );
+    const result = JSON.parse(output) as { deleted?: unknown };
+    if (typeof result.deleted !== "boolean") {
+      throw new Error("Windows Credential Manager delete returned an invalid response.");
+    }
+    if (keychainItemExists(info)) {
+      throw new Error(`The OS credential store did not delete the unlock value for account ${info.account}.`);
+    }
+    return result.deleted;
+  }
+  runKeychainDelete(info);
+  if (keychainItemExists(info)) {
+    throw new Error(`The OS credential store did not delete the unlock value for account ${info.account}.`);
+  }
+  return true;
 }
 
 export function hasKeychainPassphrase(): boolean {
@@ -346,8 +365,9 @@ function supportsLocalCredentialStore(): boolean {
 }
 
 function findNativeHelper(): string | undefined {
-  const fromEnv = process.env.SGW_KEYCHAIN_HELPER;
+  const fromEnv = testOnlyHelperOverride("SGW_KEYCHAIN_HELPER");
   if (fromEnv && existsSync(fromEnv)) {
+    assertUsableHelper(fromEnv);
     return fromEnv;
   }
 
@@ -370,23 +390,29 @@ function packagedNativeHelperCandidates(): string[] {
   const nativeTarget = `${process.platform}-${process.arch}`;
   return uniquePaths([
     path.resolve(here, "native", nativeTarget, nativeHelperName),
-    path.resolve(process.cwd(), "dist", "native", nativeTarget, nativeHelperName),
     path.resolve(here, "native", nativeHelperName),
-    path.resolve(process.cwd(), "dist", "native", nativeHelperName)
+    ...(process.env.SGW_TEST_MODE === "1"
+      ? [
+          path.resolve(here, "..", "dist", "native", nativeTarget, nativeHelperName),
+          path.resolve(here, "..", "dist", "native", nativeHelperName)
+        ]
+      : [])
   ]);
 }
 
 function findPackagedKeychainInspector(): string | undefined {
   if (process.platform !== "darwin") return undefined;
 
-  const fromEnv = process.env.SGW_KEYCHAIN_INSPECTOR;
+  const fromEnv = testOnlyHelperOverride("SGW_KEYCHAIN_INSPECTOR");
   if (fromEnv) return existsSync(fromEnv) ? path.resolve(fromEnv) : undefined;
 
   const here = path.dirname(fileURLToPath(import.meta.url));
   const nativeTarget = `${process.platform}-${process.arch}`;
   const candidates = [
     path.resolve(here, "native", nativeTarget, nativeInspectorName),
-    path.resolve(process.cwd(), "dist", "native", nativeTarget, nativeInspectorName)
+    ...(process.env.SGW_TEST_MODE === "1"
+      ? [path.resolve(here, "..", "dist", "native", nativeTarget, nativeInspectorName)]
+      : [])
   ];
   return candidates.find((candidate) => existsSync(candidate));
 }
@@ -528,7 +554,7 @@ function helperHash(filePath: string): string {
 }
 
 function preparePersistentMacHelper(): void {
-  if (process.platform !== "darwin" || process.env.SGW_KEYCHAIN_HELPER) {
+  if (process.platform !== "darwin" || testOnlyHelperOverride("SGW_KEYCHAIN_HELPER")) {
     return;
   }
   if (!existsSync(persistentKeychainHelperPath())) {
@@ -558,7 +584,7 @@ let keychainAclDumpCache: string | undefined;
 const keychainRepairWait = new Int32Array(new SharedArrayBuffer(4));
 
 function managedMacKeychainAccessEnabled(): boolean {
-  return process.platform === "darwin" && !process.env.SGW_KEYCHAIN_HELPER;
+  return process.platform === "darwin" && !testOnlyHelperOverride("SGW_KEYCHAIN_HELPER");
 }
 
 function masterPassphraseRef(): MacKeychainItemRef {
@@ -929,15 +955,18 @@ function uniquePaths(values: string[]): string[] {
 }
 
 function findWindowsCredentialHelper(): string | undefined {
-  const fromEnv = process.env.SGW_WINDOWS_CREDENTIAL_HELPER || process.env.SGW_KEYCHAIN_HELPER;
+  const fromEnv = testOnlyHelperOverride("SGW_WINDOWS_CREDENTIAL_HELPER")
+    || testOnlyHelperOverride("SGW_KEYCHAIN_HELPER");
   if (fromEnv && existsSync(fromEnv)) {
-    return fromEnv;
+    return path.resolve(fromEnv);
   }
 
   const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
     path.resolve(here, "windows", windowsCredentialHelperName),
-    path.resolve(process.cwd(), "dist", "windows", windowsCredentialHelperName)
+    ...(process.env.SGW_TEST_MODE === "1"
+      ? [path.resolve(here, "..", "dist", "windows", windowsCredentialHelperName)]
+      : [])
   ];
 
   return candidates.find((candidate) => existsSync(candidate));
@@ -1023,7 +1052,10 @@ function keychainItemExists(info: KeychainInfo): boolean {
       ["status", "-Service", info.service, "-Account", info.account]
     );
     const status = JSON.parse(output) as { configured?: unknown };
-    return status.configured === true;
+    if (typeof status.configured !== "boolean") {
+      throw new Error("Windows Credential Manager status returned an invalid response.");
+    }
+    return status.configured;
   }
 
   if (info.provider === "secret-service-cli" && info.helperPath) {
@@ -1188,13 +1220,37 @@ function runSecurity(args: string[]): string {
 }
 
 function keychainStatusCliPath(): string {
-  return process.env.SGW_KEYCHAIN_STATUS_CLI || "/usr/bin/security";
+  return testOnlyHelperOverride("SGW_KEYCHAIN_STATUS_CLI") || "/usr/bin/security";
+}
+
+function testOnlyHelperOverride(name: string): string | undefined {
+  const configured = process.env[name];
+  if (!configured) return undefined;
+  if (process.env.SGW_TEST_MODE !== "1") {
+    throw new Error(`${name} is restricted to isolated s-gw tests; reinstall s-gw to restore its packaged helper.`);
+  }
+  if (configured.includes("\0") || /[\r\n]/.test(configured)) {
+    throw new Error(`Invalid ${name} test helper path.`);
+  }
+  return path.resolve(configured);
 }
 
 function runWindowsCredentialHelper(helperPath: string, args: string[], input?: string): string {
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helperPath, ...args], {
+  const powershell = trustedWindowsPowerShellSync();
+  const result = spawnSync(powershell, [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    helperPath,
+    ...args
+  ], {
+    cwd: path.dirname(powershell),
     input,
     encoding: "utf8",
+    env: windowsSystemEnvironment(),
     stdio: ["pipe", "pipe", "pipe"]
   });
 

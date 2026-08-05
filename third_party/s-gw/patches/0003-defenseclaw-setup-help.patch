@@ -1,7 +1,7 @@
-From 90d91e5159c431ba6e3a26e9d573bbe481524654 Mon Sep 17 00:00:00 2001
+From 97ea92718889e41dea23f87ce7d670ea8dec5358 Mon Sep 17 00:00:00 2001
 From: sgateway <299698546+sgateway@users.noreply.github.com>
 Date: Tue, 4 Aug 2026 14:50:19 -0700
-Subject: [PATCH 3/4] Keep restricted setup help side-effect free
+Subject: [PATCH 3/6] Keep restricted setup help side-effect free
 
 ---
  src/cli.ts                        | 21 +++++------
@@ -9,10 +9,10 @@ Subject: [PATCH 3/4] Keep restricted setup help side-effect free
  2 files changed, 70 insertions(+), 12 deletions(-)
 
 diff --git a/src/cli.ts b/src/cli.ts
-index 0b1fc80..3cd193f 100644
+index 08f6f72..63b0f69 100644
 --- a/src/cli.ts
 +++ b/src/cli.ts
-@@ -90,7 +90,7 @@ async function main(): Promise<void> {
+@@ -96,7 +96,7 @@ async function main(): Promise<void> {
    }
  
    if (first === "setup" && (second === "-h" || hasFlag(parsed.flags, "help"))) {
@@ -21,7 +21,7 @@ index 0b1fc80..3cd193f 100644
      return;
    }
  
-@@ -2276,19 +2276,18 @@ Approval and authorization changes are available through:
+@@ -2374,19 +2374,18 @@ Approval and authorization changes are available through:
  `);
  }
  
@@ -134,3 +134,6 @@ index 6deaf1d..bfe3444 100644
    it("rejects approval and authorization mutations before creating store state", async () => {
      const policyAliases = ["add", "update", "edit", "arrange", "organize", "delete", "remove", "enable", "disable"];
      const rejectedRoutes = [
+-- 
+2.50.1 (Apple Git-155)
+

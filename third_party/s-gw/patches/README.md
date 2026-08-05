@@ -25,6 +25,14 @@ Current queue:
 4. `0004-defenseclaw-windows-launch-trust.patch` routes every Windows
    PowerShell child through the host-resolved trusted executable and keeps
    TypeScript test launchers portable across operating systems.
+5. `0005-defenseclaw-credential-status.patch` fails closed when the bundled
+   Linux credential helper returns malformed status and records the
+   kernel-derived canonical PowerShell path used by Windows SSH key
+   protection.
+6. `0006-defenseclaw-standalone-parity.patch` rejects the standalone Windows
+   login-start route before store construction, binds the host-selected
+   PowerShell to the kernel-derived canonical executable by file identity, and
+   keeps the DefenseClaw trust tests aligned with the shared Windows path helper.
 
 The pinned upstream revision includes the standalone cross-platform parity,
 dependency refresh, credential-source metadata, portable test launcher, and

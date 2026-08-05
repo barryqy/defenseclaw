@@ -72,6 +72,40 @@ type sgwRuntimeFixture struct {
 	fingerprint  string
 }
 
+func TestSGWRuntimeIdentityMatchesReleaseManifest(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "release", "s-gw-module.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		PackageName      string `json:"package_name"`
+		PackageVersion   string `json:"package_version"`
+		UpstreamRevision string `json:"upstream_revision"`
+		UpstreamTree     string `json:"upstream_tree"`
+		BuildToolchain   struct {
+			Node string `json:"node"`
+			NPM  string `json:"npm"`
+		} `json:"build_toolchain"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	checks := map[string][2]string{
+		"package name":      {manifest.PackageName, sgwModulePackageName},
+		"package version":   {manifest.PackageVersion, sgwModulePackageVersion},
+		"upstream revision": {manifest.UpstreamRevision, sgwModuleUpstreamRevision},
+		"upstream tree":     {manifest.UpstreamTree, sgwModuleUpstreamTree},
+		"Node toolchain":    {manifest.BuildToolchain.Node, sgwModuleBuildNodeVersion},
+		"npm toolchain":     {manifest.BuildToolchain.NPM, sgwModuleBuildNPMVersion},
+	}
+	for name, values := range checks {
+		if values[0] != values[1] {
+			t.Fatalf("s-gw %s mismatch: release manifest has %q, gateway expects %q", name, values[0], values[1])
+		}
+	}
+}
+
 func (fixture sgwRuntimeFixture) load() (*sgwModuleReceipt, error) {
 	return loadSGWModuleReceiptWithKey(fixture.dataDir, fixture.publicKeyPEM, fixture.fingerprint)
 }

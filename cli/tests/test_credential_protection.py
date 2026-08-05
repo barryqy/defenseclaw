@@ -1015,7 +1015,10 @@ def test_registered_mcp_environment_pins_control_environment(monkeypatch):
             "SGW_OP_CLI": "/tmp/fake-op",
             "SGW_RECOVERY_HOME": "/tmp/other-recovery",
             "SGW_SSH_CLI": "/tmp/fake-ssh",
+            "SGW_STOP_CLI_PATH": "/tmp/other-cli",
             "SGW_TEST_MODE": "1",
+            "SGW_WINDOWS_ACL_TEST_ROOT": "/tmp/acl-root",
+            "SGW_WINDOWS_STARTUP_TEST_ROOT": "/tmp/startup-root",
         }
     )
     for key, value in hostile.items():

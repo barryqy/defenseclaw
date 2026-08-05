@@ -1,35 +1,12 @@
-From 1ad2f5e46c9d3d15e16abf5c1824d4cf8a265eaa Mon Sep 17 00:00:00 2001
+From 93bd2240fc96017c6144b2989e8b729b62df9466 Mon Sep 17 00:00:00 2001
 From: sgateway <299698546+sgateway@users.noreply.github.com>
 Date: Tue, 4 Aug 2026 14:53:42 -0700
-Subject: [PATCH 4/4] Adapt Windows launch trust to current upstream
+Subject: [PATCH 4/6] Adapt Windows launch trust to current upstream
 
 ---
- src/install.ts                    | 4 ++--
  tests/defenseclaw-runtime.test.ts | 8 ++++----
- 2 files changed, 6 insertions(+), 6 deletions(-)
+ 1 file changed, 4 insertions(+), 4 deletions(-)
 
-diff --git a/src/install.ts b/src/install.ts
-index b30015c..2ac4456 100644
---- a/src/install.ts
-+++ b/src/install.ts
-@@ -902,7 +902,7 @@ function trustedWindowsConsoleListener(port: number, cliPath: string): number |
-     "}",
-     "[PSCustomObject]@{ currentSid = $currentSid; currentSessionId = $currentSessionId; processes = $processes } | ConvertTo-Json -Depth 3 -Compress"
-   ].join("\n");
--  const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", script], {
-+  const result = spawnSync(trustedWindowsPowershell(), ["-NoProfile", "-Command", script], {
-     encoding: "utf8",
-     env: {
-       ...process.env,
-@@ -1403,7 +1403,7 @@ function findRunningWindowsHelpers(scriptPath: string, port: number, url: string
-     "}",
-     "[PSCustomObject]@{ currentSid = $currentSid; currentSessionId = $currentSessionId; processes = $helperProcesses } | ConvertTo-Json -Depth 3 -Compress"
-   ].join("\n");
--  const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", script], {
-+  const result = spawnSync(trustedWindowsPowershell(), ["-NoProfile", "-Command", script], {
-     encoding: "utf8",
-     env: {
-       ...windowsEnvironment(url),
 diff --git a/tests/defenseclaw-runtime.test.ts b/tests/defenseclaw-runtime.test.ts
 index bfe3444..5dc8301 100644
 --- a/tests/defenseclaw-runtime.test.ts
@@ -70,3 +47,6 @@ index bfe3444..5dc8301 100644
          cwd: repoRoot,
          encoding: "utf8",
          env: {
+-- 
+2.50.1 (Apple Git-155)
+
