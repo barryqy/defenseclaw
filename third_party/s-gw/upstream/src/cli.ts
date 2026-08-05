@@ -24,10 +24,12 @@ import {
 import { guardStatus, prepareGuardedRun, runGuardedAgent } from "./guard.js";
 import {
   assertMacRuntimeForManagedSurfaces,
+  ensureWindowsConsole,
   getPackageLayout,
   installMacAppBundle,
   installConsoleLaunchAgent,
   installMenuBarLaunchAgent,
+  installSystemdUserService,
   launchAgentStatus,
   normalizeMenuBarCountMode,
   openMacApp,
@@ -38,12 +40,16 @@ import {
   refreshMacRuntimeServices,
   restartWindowsSurfaces,
   startInstalledLaunchAgent,
+  startInstalledSystemdUserService,
   stopInstalledLaunchAgent,
+  stopInstalledSystemdUserService,
   stopMacApp,
   stopWindowsSurfaces,
   type WindowsStoppedSurfaces,
   uninstallConsoleLaunchAgent,
-  uninstallMenuBarLaunchAgent
+  uninstallMenuBarLaunchAgent,
+  uninstallSystemdUserService,
+  systemdUserServiceStatus
 } from "./install.js";
 import { listOnePasswordSecretReferences, onePasswordStatus, readOnePasswordReference } from "./onepassword.js";
 import { installPackageUpdate, planPackageUpdate } from "./package-update.js";
@@ -83,6 +89,11 @@ async function main(): Promise<void> {
 
   if (!first || first === "help" || first === "--help") {
     printHelp();
+    return;
+  }
+
+  if (first === "setup" && (second === "-h" || hasFlag(parsed.flags, "help"))) {
+    printSetupHelp();
     return;
   }
 
@@ -311,7 +322,7 @@ async function main(): Promise<void> {
       type: secretType(getFlag(parsed.flags, "type") || "unknown"),
       value,
       service: getFlag(parsed.flags, "service"),
-      source: getFlag(parsed.flags, "source") || "macos-keychain",
+      source: getFlag(parsed.flags, "source"),
       policy: {
         injectEnv: getFlag(parsed.flags, "inject-env"),
         allowedCommands: getFlagList(parsed.flags, "allow-command"),
@@ -1039,6 +1050,10 @@ async function handleSetupCommand(
   store: SecretStore,
   flags: Record<string, string | boolean | string[]>
 ): Promise<void> {
+  if (process.platform === "win32" && hasFlag(flags, "no-service") && !hasFlag(flags, "no-menubar")) {
+    throw new Error("--no-service requires --no-menubar on Windows because the tray helper requires its matching console.");
+  }
+
   if (process.platform === "darwin") {
     const layout = getPackageLayout();
     assertMacRuntimeForManagedSurfaces(layout);
@@ -1054,8 +1069,14 @@ async function handleSetupCommand(
   let unlockAction = beforeUnlock.activeSource === "none" ? "not-configured" : `existing-${beforeUnlock.activeSource}`;
 
   if (beforeUnlock.activeSource === "none") {
-    if (process.platform !== "darwin" && process.platform !== "win32") {
-      throw new Error("s-gw setup currently needs a local OS credential store. On Linux, set SGW_MASTER_PASSPHRASE and run s-gw init.");
+    if (process.platform !== "darwin" && process.platform !== "linux" && process.platform !== "win32") {
+      throw new Error("s-gw setup needs a supported local OS credential store or SGW_MASTER_PASSPHRASE.");
+    }
+    if (beforeUnlock.keychain.state === "unavailable") {
+      throw new Error(
+        "s-gw setup cannot verify existing OS credential-store unlock material and will not generate or replace it. " +
+        (beforeUnlock.keychain.error || "Make the local credential store available, then retry.")
+      );
     }
 
     const passphrase = hasFlag(flags, "passphrase-stdin")
@@ -1070,13 +1091,20 @@ async function handleSetupCommand(
     ? await store.repairKeychainAccess()
     : undefined;
   const consoleUrl = `http://127.0.0.1:${port}/`;
-  let service = launchAgentStatus("console");
+  let service: unknown = process.platform === "linux"
+    ? systemdUserServiceStatus()
+    : launchAgentStatus("console");
   let menuBar = launchAgentStatus("menubar");
+  let windowsConsole: unknown;
   let windowsHelper: unknown;
   const appInstall = process.platform === "darwin" ? installMacAppBundle() : undefined;
 
   if (process.platform === "darwin" && !hasFlag(flags, "no-service")) {
     service = await installConsoleLaunchAgent({ port, start: true });
+  } else if (process.platform === "linux" && !hasFlag(flags, "no-service")) {
+    service = await installSystemdUserService({ port, start: true });
+  } else if (process.platform === "win32" && !hasFlag(flags, "no-service")) {
+    windowsConsole = await ensureWindowsConsole({ port, consoleUrl });
   }
 
   if (process.platform === "darwin" && !hasFlag(flags, "no-menubar")) {
@@ -1087,10 +1115,10 @@ async function handleSetupCommand(
       countMode: normalizeMenuBarCountMode(getFlag(flags, "menubar-count"))
     });
   } else if (process.platform === "win32" && !hasFlag(flags, "no-menubar")) {
-    windowsHelper = openWindowsHelper({ port, consoleUrl });
+    windowsHelper = await openWindowsHelper({ port, consoleUrl });
   }
 
-  const opened = shouldOpenUi(flags) ? openPreferredUi(port, consoleUrl) : undefined;
+  const opened = shouldOpenUi(flags) ? await openPreferredUi(port, consoleUrl) : undefined;
   const agents = hasFlag(flags, "no-agents")
     ? { skipped: true, results: [] }
     : { skipped: false, results: installAgentIntegrations() };
@@ -1103,6 +1131,7 @@ async function handleSetupCommand(
     opened,
     service,
     menuBar,
+    windowsConsole,
     windowsHelper,
     keychainHelper,
     keychainCompatibility,
@@ -1124,9 +1153,24 @@ async function handleStartCommand(flags: Record<string, string | boolean | strin
   const port = numericFlag(flags, "port", 8718);
   const consoleUrl = `http://127.0.0.1:${port}/`;
   if (process.platform === "win32") {
-    const helper = openWindowsHelper({ port, consoleUrl });
-    const opened = shouldOpenUi(flags) ? openPreferredUi(port, consoleUrl) : undefined;
-    printJson({ ok: true, consoleUrl, opened, helper });
+    if (hasFlag(flags, "no-service") && !hasFlag(flags, "no-menubar")) {
+      throw new Error("--no-service requires --no-menubar on Windows because the tray helper requires its matching console.");
+    }
+    const console = hasFlag(flags, "no-service")
+      ? undefined
+      : await ensureWindowsConsole({ port, consoleUrl });
+    const helper = hasFlag(flags, "no-menubar")
+      ? undefined
+      : await openWindowsHelper({ port, consoleUrl });
+    const opened = shouldOpenUi(flags) ? await openPreferredUi(port, consoleUrl) : undefined;
+    printJson({ ok: true, consoleUrl, opened, console, helper });
+    return;
+  }
+
+  if (process.platform === "linux") {
+    const service = await installSystemdUserService({ port, start: true });
+    const opened = shouldOpenUi(flags) ? await openPreferredUi(port, consoleUrl) : undefined;
+    printJson({ ok: true, consoleUrl, opened, service });
     return;
   }
 
@@ -1137,12 +1181,16 @@ async function handleStartCommand(flags: Record<string, string | boolean | strin
     ? startInstalledLaunchAgent("menubar")
     : await installMenuBarLaunchAgent({ port, start: true });
 
-  const opened = shouldOpenUi(flags) ? openPreferredUi(port, consoleUrl) : undefined;
+  const opened = shouldOpenUi(flags) ? await openPreferredUi(port, consoleUrl) : undefined;
 
   printJson({ ok: true, consoleUrl, opened, service, menuBar });
 }
 
 async function handleStopCommand(): Promise<void> {
+  if (process.platform === "win32") {
+    printJson({ ok: true, windows: stopWindowsSurfaces() });
+    return;
+  }
   const { service, menuBar } = stopBackgroundSurfaces();
   printJson({ ok: true, service, menuBar });
 }
@@ -1153,8 +1201,10 @@ function updateServiceLifecycle(keepAppRunning: boolean): {
 } {
   const serviceBefore = launchAgentStatus("console");
   const menuBarBefore = launchAgentStatus("menubar");
+  const systemdBefore = process.platform === "linux" ? systemdUserServiceStatus() : undefined;
   const serviceWasLoaded = process.platform === "darwin" && serviceBefore.installed && serviceBefore.loaded;
   const menuBarWasLoaded = process.platform === "darwin" && menuBarBefore.installed && menuBarBefore.loaded;
+  const systemdWasActive = Boolean(systemdBefore?.installed && systemdBefore.active);
   let macAppWasRunning = false;
   let windowsStopped: WindowsStoppedSurfaces | undefined;
 
@@ -1185,6 +1235,12 @@ function updateServiceLifecycle(keepAppRunning: boolean): {
           await restartWindowsSurfaces(windowsStopped);
         } catch (error) {
           failures.push(`Windows surfaces: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      } else if (process.platform === "linux" && systemdWasActive) {
+        try {
+          startInstalledSystemdUserService();
+        } catch (error) {
+          failures.push(`systemd service: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
 
@@ -1227,9 +1283,13 @@ function restartLaunchAgent(
 function stopBackgroundSurfaces() {
   const serviceBefore = launchAgentStatus("console");
   const menuBarBefore = launchAgentStatus("menubar");
-  const service = process.platform === "darwin" && serviceBefore.installed
-    ? stopInstalledLaunchAgent("console")
-    : serviceBefore;
+  let service: unknown = serviceBefore;
+  if (process.platform === "darwin" && serviceBefore.installed) {
+    service = stopInstalledLaunchAgent("console");
+  } else if (process.platform === "linux") {
+    const systemdBefore = systemdUserServiceStatus();
+    service = systemdBefore.installed ? stopInstalledSystemdUserService() : systemdBefore;
+  }
   const menuBar = process.platform === "darwin" && menuBarBefore.installed
     ? stopInstalledLaunchAgent("menubar")
     : menuBarBefore;
@@ -1240,6 +1300,33 @@ async function handleServiceCommand(
   action: string | undefined,
   flags: Record<string, string | boolean | string[]>
 ): Promise<void> {
+  if (process.platform === "linux") {
+    if (action === "install") {
+      printJson(await installSystemdUserService({
+        port: numericFlag(flags, "port", 8718),
+        start: hasFlag(flags, "start")
+      }));
+      return;
+    }
+    if (action === "start") {
+      printJson(startInstalledSystemdUserService());
+      return;
+    }
+    if (action === "stop") {
+      printJson(stopInstalledSystemdUserService());
+      return;
+    }
+    if (action === "status") {
+      printJson(systemdUserServiceStatus());
+      return;
+    }
+    if (action === "uninstall") {
+      printJson(await uninstallSystemdUserService());
+      return;
+    }
+    throw new Error("service requires install, start, stop, status, or uninstall.");
+  }
+
   if (action === "install") {
     printJson(
       await installConsoleLaunchAgent({
@@ -1286,7 +1373,7 @@ async function handleMenuBarCommand(
   if (action === "open") {
     if (process.platform === "win32") {
       printJson(
-        openWindowsHelper({
+        await openWindowsHelper({
           consoleUrl: getFlag(flags, "console-url"),
           port: numericFlag(flags, "port", 8718)
         })
@@ -2068,7 +2155,7 @@ async function handleAppCommand(
   if (action === "open") {
     if (process.platform === "win32") {
       printJson(
-        openWindowsClient({
+        await openWindowsClient({
           consoleUrl: getFlag(flags, "console-url"),
           port: numericFlag(flags, "port", 8718)
         })
@@ -2139,13 +2226,13 @@ async function handleGuardRun(
   process.exitCode = code;
 }
 
-function openPreferredUi(port: number, consoleUrl: string) {
-  try {
-    if (process.platform === "win32") {
-      const opened = openWindowsClient({ port, consoleUrl });
-      return { kind: "windows-client", ...opened };
-    }
+async function openPreferredUi(port: number, consoleUrl: string) {
+  if (process.platform === "win32") {
+    const opened = await openWindowsClient({ port, consoleUrl });
+    return { kind: "windows-client", ...opened };
+  }
 
+  try {
     const opened = openMacApp({ port, consoleUrl });
     return { kind: "mac-app", ...opened };
   } catch {
@@ -2155,7 +2242,9 @@ function openPreferredUi(port: number, consoleUrl: string) {
 }
 
 function shouldOpenUi(flags: Record<string, string | boolean | string[]>): boolean {
-  return !hasFlag(flags, "no-open-console") && !hasFlag(flags, "no-open-app");
+  if (hasFlag(flags, "no-open-console") || hasFlag(flags, "no-open-app")) return false;
+  if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return false;
+  return true;
 }
 
 function openBrowser(url: string): void {
@@ -2165,6 +2254,7 @@ function openBrowser(url: string): void {
     detached: true,
     stdio: "ignore"
   });
+  child.on("error", () => undefined);
   child.unref();
 }
 
@@ -2198,7 +2288,7 @@ Commands:
   s-gw init
   s-gw setup [--port 8718] [--passphrase-stdin] [--menubar-count pending|credentials|none] [--no-open-app] [--no-service] [--no-menubar] [--no-agents]
   s-gw status
-  s-gw start [--port 8718] [--no-open-app]
+  s-gw start [--port 8718] [--no-open-app] [--no-service] [--no-menubar]
   s-gw stop
   s-gw doctor
   s-gw update check [--force]
@@ -2269,6 +2359,23 @@ Commands:
   s-gw approve REQUEST_ID [--mode per-transaction|timed-session|login-session|always] [--duration 8h] [--agent-scope same-agent|any-agent]
   s-gw deny REQUEST_ID
   s-gw execute REQUEST_ID
+`);
+}
+
+function printSetupHelp(): void {
+  process.stdout.write(`Usage: s-gw setup [options]
+
+Initialize the local credential store and install the requested desktop integrations.
+
+Options:
+  --port PORT                         Console port (default: 8718)
+  --passphrase-stdin                  Read the unlock passphrase from stdin
+  --menubar-count MODE               pending, credentials, or none
+  --no-open-app                      Do not open the native app
+  --no-service                       Do not install or start the console service
+  --no-menubar                       Do not install or start the menu-bar helper
+  --no-agents                        Do not configure detected coding agents
+  -h, --help                         Show this help and exit
 `);
 }
 

@@ -1,5 +1,28 @@
+From 9258a607ec9b37a2609fb78126f3e0a7730d04ac Mon Sep 17 00:00:00 2001
+From: sgateway <299698546+sgateway@users.noreply.github.com>
+Date: Tue, 4 Aug 2026 14:49:01 -0700
+Subject: [PATCH 1/4] Apply DefenseClaw native runtime boundary
+
+---
+ package-lock.json                 |   4 +-
+ package.json                      |   2 +-
+ src/cli.ts                        | 183 ++++++++++++------------------
+ src/install.ts                    |   9 +-
+ src/mcp-server.ts                 |   6 +-
+ src/trusted-windows-command.ts    |  19 ++++
+ src/unlock.ts                     | 157 ++++++-------------------
+ src/version.ts                    |   2 +-
+ src/windows-private-acl.ts        | 118 +++++++++++++++++++
+ tests/defenseclaw-runtime.test.ts | 162 ++++++++++++++++++++++++++
+ tests/mcp-e2e.test.ts             |  24 +++-
+ tsconfig.json                     |   1 +
+ 12 files changed, 440 insertions(+), 247 deletions(-)
+ create mode 100644 src/trusted-windows-command.ts
+ create mode 100644 src/windows-private-acl.ts
+ create mode 100644 tests/defenseclaw-runtime.test.ts
+
 diff --git a/package-lock.json b/package-lock.json
-index b0e0df8..bec99ed 100644
+index 61828e7..6ba9b6c 100644
 --- a/package-lock.json
 +++ b/package-lock.json
 @@ -1,12 +1,12 @@
@@ -30,7 +53,7 @@ index 4a64aa8..5dfb638 100644
    "description": "Local credential control for AI coding agents.",
    "type": "module",
 diff --git a/src/cli.ts b/src/cli.ts
-index f529139..2ba96ae 100644
+index 238e640..592f84c 100644
 --- a/src/cli.ts
 +++ b/src/cli.ts
 @@ -1,5 +1,4 @@
@@ -47,7 +70,7 @@ index f529139..2ba96ae 100644
  import { executeApprovedRequest, executeReusablePermit } from "./executor.js";
  import {
    buildEnvCommandAction,
-@@ -32,7 +30,6 @@ import {
+@@ -34,7 +32,6 @@ import {
    normalizeMenuBarCountMode,
    openMacApp,
    openMenuBarHelper,
@@ -55,7 +78,7 @@ index f529139..2ba96ae 100644
    openWindowsHelper,
    packageHealth,
    refreshMacRuntimeServices,
-@@ -91,6 +88,7 @@ async function main(): Promise<void> {
+@@ -102,6 +99,7 @@ async function main(): Promise<void> {
      return;
    }
  
@@ -63,7 +86,7 @@ index f529139..2ba96ae 100644
    const store = new SecretStore();
  
    if (first === "init") {
-@@ -138,39 +136,13 @@ async function main(): Promise<void> {
+@@ -149,39 +147,13 @@ async function main(): Promise<void> {
    }
  
    if (first === "setup") {
@@ -105,7 +128,7 @@ index f529139..2ba96ae 100644
    }
  
    if (first === "doctor" || first === "status") {
-@@ -179,8 +151,7 @@ async function main(): Promise<void> {
+@@ -190,8 +162,7 @@ async function main(): Promise<void> {
    }
  
    if (first === "start") {
@@ -115,7 +138,7 @@ index f529139..2ba96ae 100644
    }
  
    if (first === "stop") {
-@@ -189,18 +160,15 @@ async function main(): Promise<void> {
+@@ -200,18 +171,15 @@ async function main(): Promise<void> {
    }
  
    if (first === "service") {
@@ -137,7 +160,7 @@ index f529139..2ba96ae 100644
    }
  
    if (first === "onepassword") {
-@@ -224,8 +192,7 @@ async function main(): Promise<void> {
+@@ -235,8 +203,7 @@ async function main(): Promise<void> {
    }
  
    if (first === "app") {
@@ -147,27 +170,7 @@ index f529139..2ba96ae 100644
    }
  
    if (first === "guard") {
-@@ -1054,10 +1021,6 @@ async function handleSetupCommand(
-   let unlockAction = beforeUnlock.activeSource === "none" ? "not-configured" : `existing-${beforeUnlock.activeSource}`;
- 
-   if (beforeUnlock.activeSource === "none") {
--    if (process.platform !== "darwin" && process.platform !== "win32") {
--      throw new Error("s-gw setup currently needs a local OS credential store. On Linux, set SGW_MASTER_PASSPHRASE and run s-gw init.");
--    }
--
-     const passphrase = hasFlag(flags, "passphrase-stdin")
-       ? await readStdinValue(flags, "passphrase-stdin", "unlock passphrase")
-       : randomBytes(32).toString("base64url");
-@@ -1090,7 +1053,7 @@ async function handleSetupCommand(
-     windowsHelper = openWindowsHelper({ port, consoleUrl });
-   }
- 
--  const opened = shouldOpenUi(flags) ? openPreferredUi(port, consoleUrl) : undefined;
-+  const opened = shouldOpenUi(flags) ? await openPreferredUi(port, consoleUrl) : undefined;
-   const agents = hasFlag(flags, "no-agents")
-     ? { skipped: true, results: [] }
-     : { skipped: false, results: installAgentIntegrations() };
-@@ -1113,7 +1076,7 @@ async function handleSetupCommand(
+@@ -1142,7 +1109,7 @@ async function handleSetupCommand(
      appInstall,
      agents,
      nextSteps: [
@@ -176,25 +179,7 @@ index f529139..2ba96ae 100644
        "Run `s-gw agent status` to review detected agent connections or resolve any reported conflicts.",
        "Enroll secrets locally with `s-gw secret add-keychain --value-stdin` or scan files with `s-gw scan-file PATH`."
      ]
-@@ -1125,7 +1088,7 @@ async function handleStartCommand(flags: Record<string, string | boolean | strin
-   const consoleUrl = `http://127.0.0.1:${port}/`;
-   if (process.platform === "win32") {
-     const helper = openWindowsHelper({ port, consoleUrl });
--    const opened = shouldOpenUi(flags) ? openPreferredUi(port, consoleUrl) : undefined;
-+    const opened = shouldOpenUi(flags) ? await openPreferredUi(port, consoleUrl) : undefined;
-     printJson({ ok: true, consoleUrl, opened, helper });
-     return;
-   }
-@@ -1137,7 +1100,7 @@ async function handleStartCommand(flags: Record<string, string | boolean | strin
-     ? startInstalledLaunchAgent("menubar")
-     : await installMenuBarLaunchAgent({ port, start: true });
- 
--  const opened = shouldOpenUi(flags) ? openPreferredUi(port, consoleUrl) : undefined;
-+  const opened = shouldOpenUi(flags) ? await openPreferredUi(port, consoleUrl) : undefined;
- 
-   printJson({ ok: true, consoleUrl, opened, service, menuBar });
- }
-@@ -1485,7 +1448,7 @@ async function handleOneShotEnvCommand(
+@@ -1572,7 +1539,7 @@ async function handleOneShotEnvCommand(
    if (admission.kind === "request") {
      printJson({
        approvalRequired: admission.request.state !== "approved",
@@ -203,7 +188,7 @@ index f529139..2ba96ae 100644
        localRunCommand: `s-gw execute ${admission.request.id}`,
        request: admission.request
      });
-@@ -1544,7 +1507,7 @@ async function handleSshCommand(
+@@ -1631,7 +1598,7 @@ async function handleSshCommand(
      if (action === "request" || request.state !== "approved") {
        printJson({
          approvalRequired: request.state !== "approved",
@@ -212,7 +197,7 @@ index f529139..2ba96ae 100644
          localRunCommand: `s-gw ssh run --request-id ${request.id}`,
          request
        });
-@@ -1761,9 +1724,7 @@ function awsRequestResponse(
+@@ -1848,9 +1815,7 @@ function awsRequestResponse(
  ) {
    return {
      approvalRequired: request.state !== "approved",
@@ -223,14 +208,14 @@ index f529139..2ba96ae 100644
      localRunCommand: `s-gw execute ${request.id}`,
      repeatCommand: awsCommandLine("run", awsArgs, { wrapper, handles }),
      wrapper,
-@@ -2065,25 +2026,7 @@ async function handleAppCommand(
+@@ -2152,25 +2117,7 @@ async function handleAppCommand(
      return;
    }
  
 -  if (action === "open") {
 -    if (process.platform === "win32") {
 -      printJson(
--        openWindowsClient({
+-        await openWindowsClient({
 -          consoleUrl: getFlag(flags, "console-url"),
 -          port: numericFlag(flags, "port", 8718)
 -        })
@@ -250,20 +235,20 @@ index f529139..2ba96ae 100644
  
    throw new Error("app requires app-path, install, open, refresh-services, or refresh-agents.");
  }
-@@ -2139,44 +2082,69 @@ async function handleGuardRun(
+@@ -2226,47 +2173,69 @@ async function handleGuardRun(
    process.exitCode = code;
  }
  
--function openPreferredUi(port: number, consoleUrl: string) {
--  try {
--    if (process.platform === "win32") {
--      const opened = openWindowsClient({ port, consoleUrl });
--      return { kind: "windows-client", ...opened };
--    }
+-async function openPreferredUi(port: number, consoleUrl: string) {
+-  if (process.platform === "win32") {
+-    const opened = await openWindowsClient({ port, consoleUrl });
+-    return { kind: "windows-client", ...opened };
+-  }
 +function shouldOpenUi(flags: Record<string, string | boolean | string[]>): boolean {
 +  return !hasFlag(flags, "no-open-console") && !hasFlag(flags, "no-open-app");
 +}
  
+-  try {
 -    const opened = openMacApp({ port, consoleUrl });
 -    return { kind: "mac-app", ...opened };
 -  } catch {
@@ -275,7 +260,9 @@ index f529139..2ba96ae 100644
  }
  
 -function shouldOpenUi(flags: Record<string, string | boolean | string[]>): boolean {
--  return !hasFlag(flags, "no-open-console") && !hasFlag(flags, "no-open-app");
+-  if (hasFlag(flags, "no-open-console") || hasFlag(flags, "no-open-app")) return false;
+-  if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return false;
+-  return true;
 +function nativeConsoleGuidance(): Error {
 +  return new Error("DefenseClaw owns the authenticated approval console. Run `defenseclaw credential-protection open`.");
  }
@@ -287,6 +274,7 @@ index f529139..2ba96ae 100644
 -    detached: true,
 -    stdio: "ignore"
 -  });
+-  child.on("error", () => undefined);
 -  child.unref();
 +const approvalPolicyMutations = new Set([
 +  "add",
@@ -349,7 +337,7 @@ index f529139..2ba96ae 100644
  }
  
  function printJson(value: unknown): void {
-@@ -2223,16 +2191,11 @@ Commands:
+@@ -2313,16 +2282,11 @@ Commands:
    s-gw menubar start|stop|status|uninstall
    s-gw helper open
    s-gw unlock status
@@ -366,7 +354,7 @@ index f529139..2ba96ae 100644
    s-gw onepassword status
    s-gw onepassword import [--vault Dev] [--dry-run] [--include-companions] [--allow-command CMD]
    s-gw onepassword capture --text-stdin [--vault Dev] [--name NAME] [--inject-env ENV] [--allow-command CMD]
-@@ -2242,16 +2205,8 @@ Commands:
+@@ -2332,16 +2296,8 @@ Commands:
    s-gw ssh run --request-id REQUEST_ID
    s-gw ssh close HANDLE --target user@host [--port 22]
    s-gw approval settings
@@ -383,7 +371,7 @@ index f529139..2ba96ae 100644
    s-gw scan-file PATH [--preview] [--backend keychain|local]
    s-gw agent list
    s-gw agent status [AGENT]
-@@ -2266,9 +2221,10 @@ Commands:
+@@ -2356,9 +2312,10 @@ Commands:
    s-gw requests cleanup [--pending-ttl-ms 86400000] [--approved-ttl-ms 3600000] [--no-dedupe]
    s-gw execute-next [--handle HANDLE] [--kind env_command|ssh_session] [--command CMD]
    s-gw store backups
@@ -396,6 +384,54 @@ index f529139..2ba96ae 100644
  `);
  }
  
+diff --git a/src/install.ts b/src/install.ts
+index cc8d655..b30015c 100644
+--- a/src/install.ts
++++ b/src/install.ts
+@@ -21,6 +21,7 @@ import {
+   resolveSelfContainedMacRuntime
+ } from "./self-contained-runtime.js";
+ import { unlockStatus } from "./unlock.js";
++import { trustedWindowsPowershell } from "./trusted-windows-command.js";
+ import { CURRENT_VERSION } from "./version.js";
+ 
+ export const consoleLabel = "com.s-gw.sgw.console";
+@@ -697,7 +698,7 @@ export function stopWindowsSurfaces(): WindowsStoppedSurfaces {
+     "}",
+     "$stopped | ConvertTo-Json -Compress"
+   ].join("\n");
+-  const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", script], {
++  const result = spawnSync(trustedWindowsPowershell(), ["-NoProfile", "-Command", script], {
+     encoding: "utf8",
+     stdio: ["ignore", "pipe", "pipe"]
+   });
+@@ -1121,7 +1122,7 @@ export async function openWindowsClient(options: MenuBarOptions = {}): Promise<W
+   const instanceKey = getSgwInstanceKey();
+   await ensureWindowsConsole({ ...options, port, consoleUrl: url });
+   const result = spawnSync(
+-    "powershell.exe",
++    trustedWindowsPowershell(),
+     [
+       "-NoProfile",
+       "-Sta",
+@@ -1212,7 +1213,7 @@ function launchWindowsHelper(
+ ): WindowsHelperLaunch {
+   const launchNonce = randomBytes(32).toString("hex");
+   const result = spawnSync(
+-    "powershell.exe",
++    trustedWindowsPowershell(),
+     [
+       "-NoProfile",
+       "-ExecutionPolicy",
+@@ -1335,7 +1336,7 @@ function stopLaunchedWindowsHelper(
+     "}",
+     "throw 'The launched s-gw helper did not stop.'"
+   ].join("\n");
+-  const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", script], {
++  const result = spawnSync(trustedWindowsPowershell(), ["-NoProfile", "-Command", script], {
+     encoding: "utf8",
+     env: {
+       ...windowsEnvironment(url),
 diff --git a/src/mcp-server.ts b/src/mcp-server.ts
 index c1a8858..b4fecae 100644
 --- a/src/mcp-server.ts
@@ -427,76 +463,6 @@ index c1a8858..b4fecae 100644
        request
      });
    }
-diff --git a/src/gateway.ts b/src/gateway.ts
-index ff2ab07..c4ff33c 100644
---- a/src/gateway.ts
-+++ b/src/gateway.ts
-@@ -73,7 +73,10 @@ export function preferredLocalSecretBackend(): LocalSecretBackend {
-     return configured;
-   }
- 
--  if ((process.platform === "darwin" || process.platform === "win32") && process.env.SGW_DISABLE_KEYCHAIN !== "1") {
-+  if (
-+    (process.platform === "darwin" || process.platform === "win32" || process.platform === "linux")
-+    && process.env.SGW_DISABLE_KEYCHAIN !== "1"
-+  ) {
-     return "keychain";
-   }
- 
-diff --git a/src/install.ts b/src/install.ts
-index d08077a..55e9c9c 100644
---- a/src/install.ts
-+++ b/src/install.ts
-@@ -20,6 +20,7 @@ import {
-   resolveSelfContainedMacRuntime
- } from "./self-contained-runtime.js";
- import { unlockStatus } from "./unlock.js";
-+import { trustedWindowsPowershell } from "./trusted-windows-command.js";
- import { CURRENT_VERSION } from "./version.js";
- 
- export const consoleLabel = "com.s-gw.sgw.console";
-@@ -445,7 +446,7 @@ export function stopWindowsSurfaces(): WindowsStoppedSurfaces {
-     "}",
-     "$stopped | ConvertTo-Json -Compress"
-   ].join("\n");
--  const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", script], {
-+  const result = spawnSync(trustedWindowsPowershell(), ["-NoProfile", "-Command", script], {
-     encoding: "utf8",
-     stdio: ["ignore", "pipe", "pipe"]
-   });
-@@ -703,7 +704,7 @@ export function openWindowsClient(options: MenuBarOptions = {}): WindowsOpenResu
-   const layout = getPackageLayout();
-   const url = options.consoleUrl || consoleUrl(options.port || 8718);
-   const result = spawnSync(
--    "powershell.exe",
-+    trustedWindowsPowershell(),
-     [
-       "-NoProfile",
-       "-ExecutionPolicy",
-@@ -739,7 +740,7 @@ export function openWindowsHelper(options: MenuBarOptions = {}): WindowsOpenResu
-   const layout = getPackageLayout();
-   const url = options.consoleUrl || consoleUrl(options.port || 8718);
-   const child = spawn(
--    "powershell.exe",
-+    trustedWindowsPowershell(),
-     [
-       "-NoProfile",
-       "-ExecutionPolicy",
-diff --git a/src/store.ts b/src/store.ts
-index 35439ec..2e5fee1 100644
---- a/src/store.ts
-+++ b/src/store.ts
-@@ -2493,7 +2493,9 @@ function keychainSecretLabel(name: string): string {
- }
- 
- function credentialStoreProvider(): string {
--  return process.platform === "win32" ? "windows-credential-manager" : "macos-keychain";
-+  if (process.platform === "win32") return "windows-credential-manager";
-+  if (process.platform === "linux") return "linux-secret-service";
-+  return "macos-keychain";
- }
- 
- function normalizeApprovalSettings(input?: Partial<ApprovalSettings>): ApprovalSettings {
 diff --git a/src/trusted-windows-command.ts b/src/trusted-windows-command.ts
 new file mode 100644
 index 0000000..69b5a5b
@@ -523,53 +489,65 @@ index 0000000..69b5a5b
 +  return resolved;
 +}
 diff --git a/src/unlock.ts b/src/unlock.ts
-index b723634..72c844e 100644
+index de58557..7449267 100644
 --- a/src/unlock.ts
 +++ b/src/unlock.ts
-@@ -20,11 +20,13 @@ import path from "node:path";
+@@ -20,21 +20,21 @@ import path from "node:path";
  import { fileURLToPath } from "node:url";
- import { getSgwHome } from "./paths.js";
+ import { getSgwHome, MASTER_KEYCHAIN_SERVICE, SECRET_KEYCHAIN_SERVICE } from "./paths.js";
  import { resolveSelfContainedMacRuntime } from "./self-contained-runtime.js";
 +import { trustedWindowsPowershell } from "./trusted-windows-command.js";
  
- const defaultService = "com.s-gw.sgw.master-passphrase";
- const defaultSecretService = "com.s-gw.sgw.secret";
  const nativeHelperName = "s-gw-keychain-helper";
  const nativeInspectorName = "s-gw-keychain-inspector";
 +const linuxCredentialHelperName = "s-gw-secret-service-helper";
  const keychainRepairService = "com.s-gw.sgw.keychain-repair";
  const windowsCredentialHelperName = "s-gw-credential.ps1";
  const keychainRepairTimeoutMs = 10_000;
-@@ -34,13 +36,13 @@ export interface KeychainInfo {
+ const staleKeychainRepairMs = 30_000;
+-const defaultSecretToolTimeoutMs = 10_000;
+-const maxSecretToolInputBytes = 8_191;
+ 
+ export interface KeychainInfo {
    supported: boolean;
    service: string;
    account: string;
--  provider: "native-helper" | "security-cli" | "windows-helper" | "none";
+-  provider: "native-helper" | "security-cli" | "secret-service-cli" | "windows-helper" | "none";
 +  provider: "native-helper" | "security-cli" | "windows-helper" | "secret-service-helper" | "none";
    helperPath?: string;
  }
  
- export interface UnlockStatus {
-   envConfigured: boolean;
--  activeSource: "env" | "macos-keychain" | "windows-credential-manager" | "none";
-+  activeSource: "env" | "macos-keychain" | "windows-credential-manager" | "linux-secret-service" | "none";
-   keychain: KeychainInfo & {
-     configured: boolean;
-   };
-@@ -105,7 +107,7 @@ export function unlockStatus(): UnlockStatus {
+@@ -108,9 +108,7 @@ export function unlockStatus(): UnlockStatus {
    if (envConfigured) {
      activeSource = "env";
    } else if (configured) {
--    activeSource = process.platform === "win32" ? "windows-credential-manager" : "macos-keychain";
+-    activeSource = process.platform === "win32"
+-      ? "windows-credential-manager"
+-      : process.platform === "linux" ? "linux-secret-service" : "macos-keychain";
 +    activeSource = credentialStoreSource();
    }
  
    return {
-@@ -255,16 +257,19 @@ function readKeychainPassphrase(): string | undefined {
+@@ -221,14 +219,6 @@ export function deleteMacKeychainItem(ref: MacKeychainItemRef): boolean {
+   }
+   const info = keychainInfoForItem(ref);
+   ensureNativeCredentialStore(info);
+-  if (info.provider === "secret-service-cli") {
+-    if (!keychainItemExists(info)) return false;
+-    runKeychainDelete(info);
+-    if (keychainItemExists(info)) {
+-      throw new Error(`Linux Secret Service did not delete the item for account ${ref.account}.`);
+-    }
+-    return true;
+-  }
+   runKeychainDelete(info);
+   return true;
+ }
+@@ -276,19 +266,17 @@ function readKeychainPassphrase(): string | undefined {
  
  function ensureLocalCredentialStore(): void {
    if (!keychainInfo().supported) {
--    throw new Error("OS credential-store unlock is only available on macOS or Windows.");
+-    throw new Error("OS credential-store unlock is only available on macOS, Windows, or Linux with Secret Service.");
 +    throw new Error("OS credential-store unlock is only available on macOS, Windows, or Linux.");
    }
  }
@@ -580,45 +558,58 @@ index b723634..72c844e 100644
 +    throw new Error("OS credential-store secret storage is only available on macOS, Windows, or Linux.");
    }
  
--  if ((info.provider !== "native-helper" && info.provider !== "windows-helper") || !info.helperPath) {
-+  if (
+   if (
+-    (info.provider !== "native-helper"
+-      && info.provider !== "windows-helper"
+-      && info.provider !== "secret-service-cli")
 +    !["native-helper", "windows-helper", "secret-service-helper"].includes(info.provider)
-+    || !info.helperPath
-+  ) {
+     || !info.helperPath
+   ) {
      throw missingCredentialStoreError();
-   }
- }
-@@ -294,6 +299,11 @@ function keychainProvider(): Pick<KeychainInfo, "provider" | "helperPath"> {
-     return helperPath ? { provider: "windows-helper", helperPath } : { provider: "none" };
+@@ -321,8 +309,8 @@ function keychainProvider(): Pick<KeychainInfo, "provider" | "helperPath"> {
    }
  
-+  if (process.platform === "linux") {
+   if (process.platform === "linux") {
+-    const helperPath = findLinuxSecretTool();
+-    return helperPath ? { provider: "secret-service-cli", helperPath } : { provider: "none" };
 +    const helperPath = findLinuxCredentialHelper();
 +    return helperPath ? { provider: "secret-service-helper", helperPath } : { provider: "none" };
-+  }
-+
-   if (process.platform !== "darwin") {
-     return { provider: "none" };
    }
-@@ -311,7 +321,7 @@ function keychainProvider(): Pick<KeychainInfo, "provider" | "helperPath"> {
- }
  
- function supportsLocalCredentialStore(): boolean {
--  return process.platform === "darwin" || process.platform === "win32";
-+  return process.platform === "darwin" || process.platform === "win32" || process.platform === "linux";
- }
- 
- function findNativeHelper(): string | undefined {
-@@ -912,8 +922,23 @@ function findWindowsCredentialHelper(): string | undefined {
+   if (process.platform !== "darwin") {
+@@ -943,35 +931,23 @@ function findWindowsCredentialHelper(): string | undefined {
    return candidates.find((candidate) => existsSync(candidate));
  }
  
+-function findLinuxSecretTool(): string | undefined {
+-  const candidates: string[] = [];
+-  if (process.env.SGW_TEST_MODE === "1" && process.env.SGW_SECRET_TOOL !== undefined) {
+-    candidates.push(path.resolve(process.env.SGW_SECRET_TOOL));
+-  } else {
+-    candidates.push("/usr/bin/secret-tool", "/bin/secret-tool");
+-  }
+-
+-  for (const candidate of candidates) {
+-    if (!existsSync(candidate)) continue;
+-    try {
+-      const info = lstatSync(candidate);
+-      const currentUid = typeof process.getuid === "function" ? process.getuid() : info.uid;
+-      const trustedOwner = info.uid === 0 || (process.env.SGW_TEST_MODE === "1" && info.uid === currentUid);
+-      if (!info.isFile() || info.isSymbolicLink() || !trustedOwner || (info.mode & 0o022) !== 0) {
+-        continue;
+-      }
+-      accessSync(candidate, constants.X_OK);
+-      return candidate;
+-    } catch {
+-      // Try the next fixed system path.
+-    }
 +function findLinuxCredentialHelper(): string | undefined {
 +  const fromEnv = process.env.SGW_SECRET_SERVICE_HELPER || process.env.SGW_KEYCHAIN_HELPER;
 +  if (fromEnv && existsSync(fromEnv)) {
 +    return fromEnv;
-+  }
-+
+   }
+ 
+-  return undefined;
 +  const here = path.dirname(fileURLToPath(import.meta.url));
 +  const nativeTarget = `${process.platform}-${process.arch}`;
 +  const candidates = [
@@ -626,18 +617,40 @@ index b723634..72c844e 100644
 +    path.resolve(process.cwd(), "dist", "native", nativeTarget, linuxCredentialHelperName)
 +  ];
 +  return candidates.find((candidate) => existsSync(candidate));
-+}
-+
+ }
+ 
  function runKeychainGet(info: KeychainInfo): string {
 -  if (info.provider === "native-helper" && info.helperPath) {
 +  if ((info.provider === "native-helper" || info.provider === "secret-service-helper") && info.helperPath) {
      return runNativeHelper(info.helperPath, ["get", "--service", info.service, "--account", info.account]);
    }
  
-@@ -964,11 +989,20 @@ function keychainItemExists(info: KeychainInfo): boolean {
+@@ -990,10 +966,6 @@ function runKeychainGet(info: KeychainInfo): string {
+     return runWindowsCredentialHelper(info.helperPath, ["get", "-Service", info.service, "-Account", info.account]);
+   }
+ 
+-  if (info.provider === "secret-service-cli" && info.helperPath) {
+-    return runSecretTool(info.helperPath, ["lookup", ...secretServiceAttributes(info)]);
+-  }
+-
+   throw missingCredentialStoreError();
+ }
+ 
+@@ -1026,24 +998,20 @@ function keychainItemExists(info: KeychainInfo): boolean {
      return status.configured === true;
    }
  
+-  if (info.provider === "secret-service-cli" && info.helperPath) {
+-    const result = spawnSync(info.helperPath, ["lookup", ...secretServiceAttributes(info)], {
+-      encoding: "utf8",
+-      stdio: ["ignore", "pipe", "pipe"],
+-      timeout: secretToolTimeoutMs(),
+-      killSignal: "SIGKILL"
+-    });
+-    assertSecretToolCompleted(result);
+-    if (result.status === 0) return result.stdout.replace(/\r?\n$/, "").length > 0;
+-    if (result.status === 1 && !result.stderr.trim()) return false;
+-    throw new Error(result.stderr.trim() || `Secret Service status check failed with status ${result.status}`);
 +  if (info.provider === "secret-service-helper" && info.helperPath) {
 +    const output = runNativeHelper(
 +      info.helperPath,
@@ -645,8 +658,8 @@ index b723634..72c844e 100644
 +    );
 +    const status = JSON.parse(output) as { configured?: unknown };
 +    return status.configured === true;
-+  }
-+
+   }
+ 
    return false;
  }
  
@@ -656,7 +669,26 @@ index b723634..72c844e 100644
      runNativeHelper(info.helperPath, ["set", "--service", info.service, "--account", info.account, "--label", label], passphrase);
      return;
    }
-@@ -1002,7 +1036,7 @@ function runKeychainSet(info: KeychainInfo, passphrase: string, label = "s-gw lo
+@@ -1073,26 +1041,11 @@ function runKeychainSet(info: KeychainInfo, passphrase: string, label = "s-gw lo
+     return;
+   }
+ 
+-  if (info.provider === "secret-service-cli" && info.helperPath) {
+-    const byteLength = Buffer.byteLength(passphrase, "utf8");
+-    if (byteLength > maxSecretToolInputBytes) {
+-      throw new Error(
+-        `Linux Secret Service values are limited to ${maxSecretToolInputBytes} UTF-8 bytes by secret-tool; received ${byteLength}.`
+-      );
+-    }
+-    runSecretTool(
+-      info.helperPath,
+-      [`store`, `--label=${label}`, ...secretServiceAttributes(info)],
+-      passphrase
+-    );
+-    return;
+-  }
+-
+   throw missingCredentialStoreError();
  }
  
  function runKeychainDelete(info: KeychainInfo): void {
@@ -665,20 +697,72 @@ index b723634..72c844e 100644
      runNativeHelper(info.helperPath, ["delete", "--service", info.service, "--account", info.account]);
      return;
    }
-@@ -1030,6 +1064,12 @@ function missingCredentialStoreError(): Error {
+@@ -1107,11 +1060,6 @@ function runKeychainDelete(info: KeychainInfo): void {
+     return;
+   }
+ 
+-  if (info.provider === "secret-service-cli" && info.helperPath) {
+-    runSecretTool(info.helperPath, ["clear", ...secretServiceAttributes(info)]);
+-    return;
+-  }
+-
+   throw missingCredentialStoreError();
+ }
+ 
+@@ -1122,48 +1070,13 @@ function missingCredentialStoreError(): Error {
+       "Public npm and DMG releases currently include Apple Silicon native surfaces; Intel Macs must build them from source."
+     );
+   }
+-  if (process.platform === "linux") {
+-    return new Error(
+-      "Linux Secret Service is unavailable. Install libsecret-tools and start an unlocked user keyring, " +
+-      "or use SGW_MASTER_PASSPHRASE for an explicit foreground/headless session."
+-    );
+-  }
    return new Error("No local OS credential-store provider is available. Run `npm run build:native`.");
  }
  
+-function secretServiceAttributes(info: Pick<KeychainInfo, "service" | "account">): string[] {
+-  return ["application", "s-gw", "service", info.service, "account", info.account];
+-}
+-
+-function runSecretTool(helperPath: string, args: string[], input?: string): string {
+-  const result = spawnSync(helperPath, args, {
+-    input,
+-    encoding: "utf8",
+-    stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+-    timeout: secretToolTimeoutMs(),
+-    killSignal: "SIGKILL"
+-  });
+-  assertSecretToolCompleted(result);
+-  if (result.status !== 0) {
+-    throw new Error(result.stderr.trim() || `Linux Secret Service helper failed with status ${result.status}`);
+-  }
+-  return result.stdout;
+-}
+-
+-function secretToolTimeoutMs(): number {
+-  if (process.env.SGW_TEST_MODE !== "1") return defaultSecretToolTimeoutMs;
+-  const configured = Number(process.env.SGW_SECRET_TOOL_TIMEOUT_MS);
+-  return Number.isInteger(configured) && configured > 0 && configured <= defaultSecretToolTimeoutMs
+-    ? configured
+-    : defaultSecretToolTimeoutMs;
+-}
+-
+-function assertSecretToolCompleted(result: ReturnType<typeof spawnSync>): void {
+-  if (!result.error) return;
+-  if ((result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+-    throw new Error(`Linux Secret Service helper timed out after ${secretToolTimeoutMs()} ms.`);
+-  }
+-  throw result.error;
 +function credentialStoreSource(): UnlockStatus["activeSource"] {
 +  if (process.platform === "win32") return "windows-credential-manager";
 +  if (process.platform === "linux") return "linux-secret-service";
 +  return "macos-keychain";
-+}
-+
+ }
+ 
  function runNativeHelper(helperPath: string, args: string[], input?: string): string {
-   const result = spawnSync(helperPath, args, {
-     input,
-@@ -1056,7 +1096,7 @@ function keychainStatusCliPath(): string {
+@@ -1192,7 +1105,7 @@ function keychainStatusCliPath(): string {
  }
  
  function runWindowsCredentialHelper(helperPath: string, args: string[], input?: string): string {
@@ -987,7 +1071,7 @@ index 0000000..336d567
 +  }, 15_000);
 +});
 diff --git a/tests/mcp-e2e.test.ts b/tests/mcp-e2e.test.ts
-index fc501e2..4fa801d 100644
+index 656f52e..2d80a18 100644
 --- a/tests/mcp-e2e.test.ts
 +++ b/tests/mcp-e2e.test.ts
 @@ -5,6 +5,7 @@ import path from "node:path";

@@ -30,15 +30,18 @@ DefenseClaw-specific changes belong in a visible patch queue under `patches/`
 until the same change is accepted in the standalone s-gw repository. Never
 edit `upstream/` directly.
 
-The current patch queue advances the integrated module to 0.2.0, adds Linux
-Secret Service setup support, and keeps restricted setup help side-effect free.
-Raw proxy tokenization, pending-enrollment
+The upstream mirror pins the cross-platform credential-store, lifecycle
+parity, and independent Windows helper lifetime work from `sgateway/s-gw#74`.
+The current patch queue advances the integrated module to 0.2.0, replaces the
+standalone Linux Secret Service CLI with the packaged helper contract, and
+keeps restricted setup help side-effect
+free. Raw proxy tokenization, pending-enrollment
 ciphertext, the approval console, and approval mutations are deliberately
 absent from the TypeScript runtime; the signed native runner owns those
 surfaces. The DefenseClaw native gateway performs platform-specific runner
 admission before opening the console or sending proxy segments. The upstream
-source mirror remains at public 0.1.19 plus its pinned post-release maintenance
-commit.
+package version remains 0.1.19; the exact unreleased revision is recorded in
+`release/s-gw-module.json`.
 
 Production packages require an approved execution runner, OS credential-store
 helper, built approval UI, and target-specific third-party license bundle for

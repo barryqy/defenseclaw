@@ -1,14 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access, chmod, lstat, mkdir, open, readFile, readdir, rename, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { decryptSecret, encryptSecret, fingerprintSecret, shortId } from "./crypto.js";
 import { agentNameFromReason, requestAgentIdentity, requestAgentName, type AgentIdentity, type AgentIdentityContext } from "./agent-context.js";
 import { normalizeOnePasswordReference, readOnePasswordReference } from "./onepassword.js";
 import { arrangeApprovalPolicyRules as arrangePolicyRules, compareApprovalPolicyRules } from "./policy-order.js";
 import { SGW_SSH_SESSION_COMMAND, normalizeSshPort, normalizeSshTarget, sshSessionIdentity } from "./ssh.js";
-import { ensureSgwHome, getSgwHome, getSgwRecoveryHome, getStorePath } from "./paths.js";
+import { ensureSgwHome, getSgwHome, getSgwLoginSessionId, getSgwRecoveryHome, getStorePath } from "./paths.js";
 import {
   defaultSecretKeychainService,
   deleteMacKeychainItem,
@@ -622,17 +621,17 @@ export class SecretStore {
   }
 
   async deleteSecret(handle: string): Promise<DeleteSecretResult> {
-    let keychainRef: MacKeychainItemRef | undefined;
-    const result = await this.mutate((store) => {
+    return this.mutate((store) => {
       const index = store.secrets.findIndex((secret) => secret.handle === handle);
       if (index < 0) {
         throw new Error(`Unknown secret handle: ${handle}`);
       }
 
-      const [deleted] = store.secrets.splice(index, 1);
+      const deleted = store.secrets[index];
       if (deleted.backend === "keychain") {
-        keychainRef = keychainRefFromRecord(deleted);
+        deleteMacKeychainItem(keychainRefFromRecord(deleted));
       }
+      store.secrets.splice(index, 1);
 
       const beforeGrants = store.approvalGrants.length;
       const beforePolicies = (store.approvalPolicyRules || []).length;
@@ -676,12 +675,6 @@ export class SecretStore {
         failedRequests
       };
     });
-
-    if (keychainRef) {
-      deleteMacKeychainItem(keychainRef);
-    }
-
-    return result;
   }
 
   async getApprovalSettings(): Promise<ApprovalSettings> {
@@ -2493,7 +2486,8 @@ function keychainSecretLabel(name: string): string {
 }
 
 function credentialStoreProvider(): string {
-  return process.platform === "win32" ? "windows-credential-manager" : "macos-keychain";
+  if (process.platform === "win32") return "windows-credential-manager";
+  return process.platform === "linux" ? "linux-secret-service" : "macos-keychain";
 }
 
 function normalizeApprovalSettings(input?: Partial<ApprovalSettings>): ApprovalSettings {
@@ -4010,21 +4004,7 @@ function severityRank(value: SecretSeverity): number {
 }
 
 function currentLoginSessionId(): string {
-  const override = process.env.SGW_LOGIN_SESSION_ID?.trim();
-  if (override) {
-    return override.slice(0, 160);
-  }
-
-  const user = os.userInfo();
-  const parts = [
-    process.platform,
-    String(user.uid),
-    user.username,
-    process.env.TMPDIR || "",
-    process.env.XDG_RUNTIME_DIR || "",
-    process.env.SSH_AUTH_SOCK || ""
-  ];
-  return createHash("sha256").update(parts.join("\0")).digest("base64url").slice(0, 32);
+  return getSgwLoginSessionId();
 }
 
 function normalizePolicy(input?: Partial<SecretPolicy>, existing?: SecretPolicy): SecretPolicy {

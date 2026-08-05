@@ -1,8 +1,19 @@
+From c4c00c87e658a1d520d51b8d96d7cb82f503f857 Mon Sep 17 00:00:00 2001
+From: sgateway <299698546+sgateway@users.noreply.github.com>
+Date: Tue, 4 Aug 2026 14:49:39 -0700
+Subject: [PATCH 2/4] Harden DefenseClaw native authorization boundary
+
+---
+ src/cli.ts                        | 77 +++++++------------------------
+ tests/defenseclaw-runtime.test.ts | 71 +++++++++++++++++++++++++++-
+ tests/mcp-e2e.test.ts             | 25 ++++++++--
+ 3 files changed, 109 insertions(+), 64 deletions(-)
+
 diff --git a/src/cli.ts b/src/cli.ts
-index 2ba96ae..bb79d16 100644
+index 592f84c..0b1fc80 100644
 --- a/src/cli.ts
 +++ b/src/cli.ts
-@@ -83,12 +83,13 @@ async function main(): Promise<void> {
+@@ -94,12 +94,13 @@ async function main(): Promise<void> {
      return;
    }
  
@@ -17,10 +28,14 @@ index 2ba96ae..bb79d16 100644
    const store = new SecretStore();
  
    if (first === "init") {
-@@ -1006,12 +1007,6 @@ async function handleSetupCommand(
+@@ -1017,16 +1018,6 @@ async function handleSetupCommand(
    store: SecretStore,
    flags: Record<string, string | boolean | string[]>
  ): Promise<void> {
+-  if (process.platform === "win32" && hasFlag(flags, "no-service") && !hasFlag(flags, "no-menubar")) {
+-    throw new Error("--no-service requires --no-menubar on Windows because the tray helper requires its matching console.");
+-  }
+-
 -  if (process.platform === "darwin") {
 -    const layout = getPackageLayout();
 -    assertMacRuntimeForManagedSurfaces(layout);
@@ -30,18 +45,25 @@ index 2ba96ae..bb79d16 100644
    const keychainHelper = process.platform === "darwin" ? installPersistentKeychainHelper() : undefined;
    const keychainCompatibility = process.platform === "darwin" ? pinPackagedKeychainHelper() : undefined;
    const beforeUnlock = unlockStatus();
-@@ -1032,49 +1027,18 @@ async function handleSetupCommand(
+@@ -1057,57 +1048,18 @@ async function handleSetupCommand(
    const secretKeychainRepair = process.platform === "darwin"
      ? await store.repairKeychainAccess()
      : undefined;
 -  const consoleUrl = `http://127.0.0.1:${port}/`;
--  let service = launchAgentStatus("console");
+-  let service: unknown = process.platform === "linux"
+-    ? systemdUserServiceStatus()
+-    : launchAgentStatus("console");
 -  let menuBar = launchAgentStatus("menubar");
+-  let windowsConsole: unknown;
 -  let windowsHelper: unknown;
 -  const appInstall = process.platform === "darwin" ? installMacAppBundle() : undefined;
 -
 -  if (process.platform === "darwin" && !hasFlag(flags, "no-service")) {
 -    service = await installConsoleLaunchAgent({ port, start: true });
+-  } else if (process.platform === "linux" && !hasFlag(flags, "no-service")) {
+-    service = await installSystemdUserService({ port, start: true });
+-  } else if (process.platform === "win32" && !hasFlag(flags, "no-service")) {
+-    windowsConsole = await ensureWindowsConsole({ port, consoleUrl });
 -  }
 -
 -  if (process.platform === "darwin" && !hasFlag(flags, "no-menubar")) {
@@ -52,7 +74,7 @@ index 2ba96ae..bb79d16 100644
 -      countMode: normalizeMenuBarCountMode(getFlag(flags, "menubar-count"))
 -    });
 -  } else if (process.platform === "win32" && !hasFlag(flags, "no-menubar")) {
--    windowsHelper = openWindowsHelper({ port, consoleUrl });
+-    windowsHelper = await openWindowsHelper({ port, consoleUrl });
 -  }
 -
 -  const opened = shouldOpenUi(flags) ? await openPreferredUi(port, consoleUrl) : undefined;
@@ -68,6 +90,7 @@ index 2ba96ae..bb79d16 100644
 -    opened,
 -    service,
 -    menuBar,
+-    windowsConsole,
 -    windowsHelper,
      keychainHelper,
      keychainCompatibility,
@@ -81,7 +104,7 @@ index 2ba96ae..bb79d16 100644
      nextSteps: [
        "Open the approval console with `defenseclaw credential-protection open`.",
        "Run `s-gw agent status` to review detected agent connections or resolve any reported conflicts.",
-@@ -2109,8 +2073,13 @@ const approvalPolicyMutations = new Set([
+@@ -2200,8 +2152,13 @@ const approvalPolicyMutations = new Set([
  function rejectDefenseClawAuthorizationMutation(
    first: string,
    second: string | undefined,
@@ -96,16 +119,16 @@ index 2ba96ae..bb79d16 100644
    if (first === "approve" || first === "deny") {
      throw nativeAuthorizationGuidance();
    }
-@@ -2164,7 +2133,7 @@ function printHelp(): void {
+@@ -2255,7 +2212,7 @@ function printHelp(): void {
  
  Commands:
    s-gw init
 -  s-gw setup [--port 8718] [--passphrase-stdin] [--menubar-count pending|credentials|none] [--no-open-app] [--no-service] [--no-menubar] [--no-agents]
 +  s-gw setup --no-open-console --no-service --no-menubar --no-agents
    s-gw status
-   s-gw start [--port 8718] [--no-open-app]
+   s-gw start [--port 8718] [--no-open-app] [--no-service] [--no-menubar]
    s-gw stop
-@@ -2180,8 +2149,8 @@ Commands:
+@@ -2271,8 +2228,8 @@ Commands:
    s-gw app refresh-services [--no-agents]
    s-gw app refresh-agents [--lock-timeout-ms 35000]
    s-gw guard status
@@ -116,7 +139,7 @@ index 2ba96ae..bb79d16 100644
    s-gw run env-command HANDLE --command CMD --inject-env ENV [--with-env ENV=HANDLE] [--arg VALUE] [--raw]
    s-gw service install [--port 8718] [--start]
    s-gw service start|stop|status|uninstall
-@@ -2191,14 +2160,14 @@ Commands:
+@@ -2282,14 +2239,14 @@ Commands:
    s-gw menubar start|stop|status|uninstall
    s-gw helper open
    s-gw unlock status
@@ -241,7 +264,7 @@ index 336d567..6deaf1d 100644
        expect(stored.trim().length).toBeGreaterThanOrEqual(8);
        expect(output).not.toContain(stored);
 diff --git a/tests/mcp-e2e.test.ts b/tests/mcp-e2e.test.ts
-index 4fa801d..afcf0a4 100644
+index 2d80a18..6534fe4 100644
 --- a/tests/mcp-e2e.test.ts
 +++ b/tests/mcp-e2e.test.ts
 @@ -65,13 +65,12 @@ describe("MCP end-to-end flow", () => {
@@ -259,7 +282,7 @@ index 4fa801d..afcf0a4 100644
 +    await allowCommandAsNativeFixture(addPayload.handle, process.execPath);
  
      const transport = new StdioClientTransport({
-       command: tsxBin,
+       command: process.execPath,
 @@ -165,3 +164,23 @@ async function approveAsNativeFixture(requestId: string): Promise<void> {
      }
    }

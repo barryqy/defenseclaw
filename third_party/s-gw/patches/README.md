@@ -12,32 +12,21 @@ Current queue:
    Windows helper command admission. It disables the bundled Node console,
    service, and app surfaces and intentionally contains no TypeScript proxy
    tokenizer, quarantine, restricted MCP fallback, or enrollment approval
-   mutation. The DefenseClaw
-   native gateway admits and launches the signed runner for raw proxy
-   tokenization and user-presence approval. The patch must be applied to
-   standalone s-gw before the integrated DefenseClaw release is pushed.
+   mutation. The DefenseClaw native gateway admits and launches the signed
+   runner for raw proxy tokenization and user-presence approval.
 2. `0002-defenseclaw-native-authorization-hardening.patch` rejects every CLI
    `--allow-command` enrollment path before store construction and removes
    native app, service, menu bar, and browser work from restricted setup.
    Command authorization and approval UI remain owned by the admitted native
    runner.
-3. `0003-update-fast-uri.patch` refreshes the transitive `fast-uri` lock entry
-   from 3.1.2 to 3.1.5 to remove the reviewed high-severity production
-   advisories without changing the exact upstream source mirror.
-4. `0004-update-mcp-sdk-dependencies.patch` refreshes the MCP SDK and its Hono
-   and IP-address runtime dependencies, together with the PostCSS build chain,
-   to remove their reviewed advisories without changing the exact upstream
-   source mirror.
-5. `0005-platform-credential-source-metadata.patch` lets the credential-store
-   provider choose default source metadata instead of hard-coding the macOS
-   keychain. Its Linux runtime regression covers setup and keychain enrollment
-   through a fake Secret Service helper. This matches standalone s-gw commit
-   `ec1912085f0747d725dac32ca3d26e19c412abf2`.
-6. `0006-windows-safe-tsx-launcher.patch` starts TypeScript test entrypoints
-   through Node and the portable `tsx` module CLI instead of invoking a
-   platform-specific package-manager shim. This matches standalone s-gw commit
-   `e05cc5b5760fea969cfed88d7a2e0cef4dd3500d`.
-7. `0007-defenseclaw-setup-help.patch` makes `s-gw setup --help` and
+3. `0003-defenseclaw-setup-help.patch` makes `s-gw setup --help` and
    `s-gw setup -h` print the restricted DefenseClaw setup contract before any
-   credential-store, service, or UI work. This adapts standalone s-gw commit
-   `af4f01cf0e8bd061778da83c6d2a6e7034ae7b16` to the integrated runtime.
+   credential-store, service, or UI work.
+4. `0004-defenseclaw-windows-launch-trust.patch` routes every Windows
+   PowerShell child through the host-resolved trusted executable and keeps
+   TypeScript test launchers portable across operating systems.
+
+The pinned upstream revision includes the standalone cross-platform parity,
+dependency refresh, credential-source metadata, portable test launcher, and
+side-effect-free setup help and Windows helper lifetime work from
+`sgateway/s-gw#74`. The queue contains only DefenseClaw host adaptations.

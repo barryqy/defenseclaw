@@ -15,11 +15,11 @@
       "size": 482
     },
     {
-      "git_blob": "1350b74b6f1c964686dbcc2ef6b871ed2893075b",
+      "git_blob": "a612f73a48d72a7cdc6c4a9740dadb2d36f40361",
       "mode": "100644",
       "path": "README.md",
-      "sha256": "b8a36fc73b38f277b4ec5eb6a84b64ff534cc2cc30f37ee9fa9cd7f44094a99d",
-      "size": 14635
+      "sha256": "6e859219f85fa6d2be685c685cf30c8280d6763595301302bd636432f05b3ba2",
+      "size": 15280
     },
     {
       "git_blob": "75775431624b8beb790be6d00595a82ed2f75f0b",
@@ -71,11 +71,11 @@
       "size": 810
     },
     {
-      "git_blob": "b0e0df8a0ba22d6e637c28176c0e11686f3826ca",
+      "git_blob": "61828e7513b12fd6e6a68cbb326f683ea3d7490e",
       "mode": "100644",
       "path": "package-lock.json",
-      "sha256": "70eb1b18347ddda617c98499a4dfb0ccb4ebcb804004845da3dc169938ea861e",
-      "size": 209958
+      "sha256": "39e780029312d104695c08b3906dbf53d94bc2aaec1d034f06691da880bb6625",
+      "size": 209957
     },
     {
       "git_blob": "4a64aa8afe82caf5f49c604b6f7231b1edcbf82a",
@@ -106,11 +106,11 @@
       "size": 29759
     },
     {
-      "git_blob": "f5291392e91c68c60c9d642cbdc46a30abf27a77",
+      "git_blob": "238e640cd84e1e8178d6d46e5606b7c76b6d1694",
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "84f1a0f5e7a88fbef7879e3e2e30052295c54d57c2ab5715e9545f2eb4f18788",
-      "size": 73366
+      "sha256": "f79a41f4c56a869555a9a7dd22b9151fe4685ec733fcbc51eb10f1f0e51c2f6a",
+      "size": 77821
     },
     {
       "git_blob": "6f67005428acd88245dbc79df13970c15f3a35b0",
@@ -120,11 +120,11 @@
       "size": 4676
     },
     {
-      "git_blob": "bb84f416383bc444ea80ea9e3debc19236196ff4",
+      "git_blob": "2169fed921e59443b562f9a3ad5235bfa892b307",
       "mode": "100644",
       "path": "src/console-server.ts",
-      "sha256": "c9e3f459d8b181d259920cf60889cb6f55bdcf8f39b187fd942ff532eacdaee4",
-      "size": 48378
+      "sha256": "bc946f64b822f2b9b019fbc30e91a7f6dc45608f26b500d1a7b748b11b62a93c",
+      "size": 48734
     },
     {
       "git_blob": "aaa43e2537be94a257d8ea741d895d79e293cf0b",
@@ -141,11 +141,11 @@
       "size": 19698
     },
     {
-      "git_blob": "ff2ab07f413c0dad7fc8ac5e08056c560077397a",
+      "git_blob": "8be0c2a40cef3f945dac2d6017096fe6d6e76ae7",
       "mode": "100644",
       "path": "src/gateway.ts",
-      "sha256": "41c2a11e4e9260fdac41c423d77972c57d8d1c19939641438590f532492bc9dd",
-      "size": 4991
+      "sha256": "683b62ee5de86d13afb58b650419b35d9cd3e78860381de301bc7d68708fca33",
+      "size": 5313
     },
     {
       "git_blob": "a4baac7696cf86b927edd7311e36087e26d8e762",
@@ -155,11 +155,11 @@
       "size": 9075
     },
     {
-      "git_blob": "d08077a231fa7051a55b67d146032b8d56dfcd14",
+      "git_blob": "cc8d65537be0c3d6bf5e56f7a7b9a471e8f46590",
       "mode": "100644",
       "path": "src/install.ts",
-      "sha256": "6fb3501a563322f795e1d19302c99e06170fa6276b5833186f9c7de4cf17d5ce",
-      "size": 43385
+      "sha256": "fe9577117914f5aa7ba72d671797058bc8a862ca95bce131ad117549b989b3db",
+      "size": 80111
     },
     {
       "git_blob": "c1a88583d5770785ec831224ca64a7873a99aa0d",
@@ -183,11 +183,11 @@
       "size": 28922
     },
     {
-      "git_blob": "e41abac5bd23ac62abfbbd8f572fc00cc6d979e0",
+      "git_blob": "7b3a6edd3afc7049c757f43b472b36f9aba0f3fb",
       "mode": "100644",
       "path": "src/paths.ts",
-      "sha256": "bc2924687af525cf33de6dc375543906c27be6e5c66cc9206d9e9934bd39e0b2",
-      "size": 5850
+      "sha256": "ecf030ca8113240a33ff779c02cdad391349dad1e7d6844d520a36cd3d66acaf",
+      "size": 8108
     },
     {
       "git_blob": "9066bd6588d2a725540a8cfddf4ab860017ca37b",
@@ -218,11 +218,11 @@
       "size": 11625
     },
     {
-      "git_blob": "35439ec58572903ee72fd2f496cd4c1cca4e4d18",
+      "git_blob": "f12882c658d71f84d4807b0b0395d3b595f9ce5f",
       "mode": "100644",
       "path": "src/store.ts",
-      "sha256": "b9687b00ece8d11053d912363c01df876e4e9320ad3f705ef128d49f644d05af",
-      "size": 151843
+      "sha256": "a9bf39b10e000f6171a4d654ad62977dbb1892c7e90e6d40a69e2d63272ee865",
+      "size": 151386
     },
     {
       "git_blob": "8d80dc14296f466bb8ec1ff091e12c8039677e9f",
@@ -232,11 +232,11 @@
       "size": 5074
     },
     {
-      "git_blob": "b72363448a4ea94b51fffafd4884b2e28c71413c",
+      "git_blob": "de58557b684813c5bfdb1b239898f6ec33438c29",
       "mode": "100644",
       "path": "src/unlock.ts",
-      "sha256": "2a468ee235a78934d2a17ee61754ce9da86276435580c42a4678ba90a9e78f3b",
-      "size": 34612
+      "sha256": "e2b7abdce3b46a5ee68ef4adac30676f9f4e6ae1f9b268235a432f636c990700",
+      "size": 39966
     },
     {
       "git_blob": "82acba4b424c74317ca147db74151c006b990c54",
@@ -253,11 +253,11 @@
       "size": 41
     },
     {
-      "git_blob": "fc501e204cd36e3f08d8f8e21cee35cc43fa1cbe",
+      "git_blob": "656f52e01ef0cc23da44f51700fb3b99f05a8c50",
       "mode": "100644",
       "path": "tests/mcp-e2e.test.ts",
-      "sha256": "02df4d1470813f73410caf2be55ff7b75f2408a0ea4a3aa7a82d00d74eaf3535",
-      "size": 4840
+      "sha256": "71cf3e48b84fabeb6bcc2431d03f1c6e125a8ae30f753e89bffaf82958815761",
+      "size": 4878
     },
     {
       "git_blob": "972c25ea12a66d715b433ce1e4cc5a1e908e452f",
@@ -282,7 +282,7 @@
     }
   ],
   "repository": "https://github.com/sgateway/s-gw.git",
-  "revision": "ba99e6d11dff2bbcd71d8cc64302b85ee2f937f9",
+  "revision": "47aae064da2aae4114d1dac1208936ac102457fa",
   "schema_version": 2,
-  "tree": "4762d7df6b2b7f4f1afb33d23a869a96738ae904"
+  "tree": "855069e2612b4e30a13886b00f3035f863847829"
 }

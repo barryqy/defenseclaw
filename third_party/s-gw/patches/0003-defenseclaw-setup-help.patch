@@ -1,25 +1,36 @@
+From 90d91e5159c431ba6e3a26e9d573bbe481524654 Mon Sep 17 00:00:00 2001
+From: sgateway <299698546+sgateway@users.noreply.github.com>
+Date: Tue, 4 Aug 2026 14:50:19 -0700
+Subject: [PATCH 3/4] Keep restricted setup help side-effect free
+
+---
+ src/cli.ts                        | 21 +++++------
+ tests/defenseclaw-runtime.test.ts | 61 ++++++++++++++++++++++++++++++-
+ 2 files changed, 70 insertions(+), 12 deletions(-)
+
 diff --git a/src/cli.ts b/src/cli.ts
+index 0b1fc80..3cd193f 100644
 --- a/src/cli.ts
 +++ b/src/cli.ts
-@@ -80,6 +80,11 @@ async function main(): Promise<void> {
+@@ -90,7 +90,7 @@ async function main(): Promise<void> {
+   }
  
-   if (!first || first === "help" || first === "--help") {
-     printHelp();
-+    return;
-+  }
-+
-+  if (first === "setup" && (second === "-h" || hasFlag(parsed.flags, "help"))) {
+   if (first === "setup" && (second === "-h" || hasFlag(parsed.flags, "help"))) {
+-    printSetupHelp();
 +    printRestrictedSetupHelp();
      return;
    }
  
-@@ -2197,6 +2202,22 @@ Approval and authorization changes are available through:
+@@ -2276,19 +2276,18 @@ Approval and authorization changes are available through:
  `);
  }
  
+-function printSetupHelp(): void {
+-  process.stdout.write(`Usage: s-gw setup [options]
 +function printRestrictedSetupHelp(): void {
 +  process.stdout.write(`Usage: s-gw setup --no-open-console --no-service --no-menubar --no-agents
-+
+ 
+-Initialize the local credential store and install the requested desktop integrations.
 +Configure the credential store for the restricted DefenseClaw runtime.
 +
 +Required options:
@@ -27,16 +38,20 @@ diff --git a/src/cli.ts b/src/cli.ts
 +  --no-service                       DefenseClaw owns the credential service lifecycle
 +  --no-menubar                       DefenseClaw does not install the s-gw menu-bar helper
 +  --no-agents                        DefenseClaw manages agent integration
-+
-+Options:
-+  -h, --help                         Show this help and exit
-+`);
-+}
-+
- async function run(): Promise<void> {
-   await main();
-   await printUpdateNotice();
+ 
+ Options:
+-  --port PORT                         Console port (default: 8718)
+-  --passphrase-stdin                  Read the unlock passphrase from stdin
+-  --menubar-count MODE               pending, credentials, or none
+-  --no-open-app                      Do not open the native app
+-  --no-service                       Do not install or start the console service
+-  --no-menubar                       Do not install or start the menu-bar helper
+-  --no-agents                        Do not configure detected coding agents
+   -h, --help                         Show this help and exit
+ `);
+ }
 diff --git a/tests/defenseclaw-runtime.test.ts b/tests/defenseclaw-runtime.test.ts
+index 6deaf1d..bfe3444 100644
 --- a/tests/defenseclaw-runtime.test.ts
 +++ b/tests/defenseclaw-runtime.test.ts
 @@ -1,5 +1,5 @@

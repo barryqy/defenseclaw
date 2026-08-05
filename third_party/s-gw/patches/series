@@ -1,7 +1,4 @@
 0001-defenseclaw-native-runtime-boundary.patch
 0002-defenseclaw-native-authorization-hardening.patch
-0003-update-fast-uri.patch
-0004-update-mcp-sdk-dependencies.patch
-0005-platform-credential-source-metadata.patch
-0006-windows-safe-tsx-launcher.patch
-0007-defenseclaw-setup-help.patch
+0003-defenseclaw-setup-help.patch
+0004-defenseclaw-windows-launch-trust.patch
