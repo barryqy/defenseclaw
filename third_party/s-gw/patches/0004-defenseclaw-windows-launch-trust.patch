@@ -1,4 +1,4 @@
-From 671f67cd19de421a92b30bc5b77639936fcf57aa Mon Sep 17 00:00:00 2001
+From b52b7597a9d002601fbd1296d590783090120c22 Mon Sep 17 00:00:00 2001
 From: sgateway <299698546+sgateway@users.noreply.github.com>
 Date: Tue, 4 Aug 2026 14:53:42 -0700
 Subject: [PATCH 4/6] Adapt Windows launch trust to current upstream
