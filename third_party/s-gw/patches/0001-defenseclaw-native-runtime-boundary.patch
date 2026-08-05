@@ -1,4 +1,4 @@
-From d756612adc2dfe4b999dff27be5218b8349403bd Mon Sep 17 00:00:00 2001
+From 125ed993b95d5625316a8af379e8bea64b0224fb Mon Sep 17 00:00:00 2001
 From: sgateway <299698546+sgateway@users.noreply.github.com>
 Date: Tue, 4 Aug 2026 14:49:01 -0700
 Subject: [PATCH 1/6] Apply DefenseClaw native runtime boundary

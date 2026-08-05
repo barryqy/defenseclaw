@@ -267,11 +267,11 @@
       "size": 18668
     },
     {
-      "git_blob": "81945e1eccb2cbd4fb4fa8b8e3595a112eb84b34",
+      "git_blob": "83ccf2379417fff37a76891c4819888208c79045",
       "mode": "100644",
       "path": "src/windows-startup.ts",
-      "sha256": "75013082677d853858af6ba29da5d9abbc4863d450cdcb9f98f2dd33dafc8be2",
-      "size": 28085
+      "sha256": "b3265a499fb3ef60473b7a48d4ed8150bf983b6406083440efa77aa0cb64f3b9",
+      "size": 28093
     },
     {
       "git_blob": "4966702453a4620b4d2efaa065078b8beff5866e",
@@ -310,7 +310,7 @@
     }
   ],
   "repository": "https://github.com/sgateway/s-gw.git",
-  "revision": "b4771cc55d744579db8db5e0273b7524669bec88",
+  "revision": "d018ced4fb6a2c42a9947833c3ad7b33f2993b33",
   "schema_version": 2,
-  "tree": "19246be282f6082d11ee74447f3aebecb699f347"
+  "tree": "83b740e8a66e559577451f298c0ddcdd1c3b26ac"
 }
