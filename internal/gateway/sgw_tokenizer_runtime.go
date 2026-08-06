@@ -34,8 +34,8 @@ import (
 const (
 	sgwModulePackageName      = "@s-gw/s-gw"
 	sgwModulePackageVersion   = "0.2.0"
-	sgwModuleUpstreamRevision = "893ffc9ef4b23deea4b2c6960199ac6fb1ee6353"
-	sgwModuleUpstreamTree     = "2cf8752be2c37f5ffbfc759304971a71a6fb90b6"
+	sgwModuleUpstreamRevision = "652b042ef61da6170cb26aa8e4d8e446dc1c9b22"
+	sgwModuleUpstreamTree     = "0451e84cbfa65c5050df309c1b045344b75dae10"
 	sgwModuleBuildNodeVersion = "24.18.1"
 	sgwModuleBuildNPMVersion  = "11.16.0"
 	sgwModuleReceiptLimit     = 1024 * 1024

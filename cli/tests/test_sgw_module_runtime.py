@@ -349,8 +349,8 @@ def package_artifact(
         "schema_version": 1,
         "package_name": "@s-gw/s-gw",
         "package_version": "0.2.0",
-        "upstream_revision": "893ffc9ef4b23deea4b2c6960199ac6fb1ee6353",
-        "upstream_tree": "2cf8752be2c37f5ffbfc759304971a71a6fb90b6",
+        "upstream_revision": "652b042ef61da6170cb26aa8e4d8e446dc1c9b22",
+        "upstream_tree": "0451e84cbfa65c5050df309c1b045344b75dae10",
         "minimum_node_version": "20.0.0",
         "build_toolchain": {"node": "24.18.1", "npm": "11.16.0"},
         "target": TARGET,
@@ -1117,8 +1117,8 @@ def test_signature_payloads_have_a_fixed_cross_language_contract() -> None:
         "target=linux-x64\n"
         "package_name=@s-gw/s-gw\n"
         "package_version=0.2.0\n"
-        "upstream_revision=893ffc9ef4b23deea4b2c6960199ac6fb1ee6353\n"
-        "upstream_tree=2cf8752be2c37f5ffbfc759304971a71a6fb90b6\n"
+        "upstream_revision=652b042ef61da6170cb26aa8e4d8e446dc1c9b22\n"
+        "upstream_tree=0451e84cbfa65c5050df309c1b045344b75dae10\n"
         f"runner_contract_sha256={contract_sha256}\n"
         f"runner_launch_admission_sha256={admission_sha256}\n"
         f"installed_sha256={'c' * 64}\n"

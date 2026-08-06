@@ -46,6 +46,9 @@ export const systemdUnitName = "s-gw.service";
 
 const defaultWindowsProcessInspectionTimeoutMs = 15_000;
 const maxWindowsProcessInspectionTestTimeoutMs = 120_000;
+const defaultWindowsHelperLaunchTimeoutMs = 15_000;
+const defaultWindowsHelperCleanupTimeoutMs = 10_000;
+const maxWindowsHelperOperationTestTimeoutMs = 120_000;
 
 export interface PackageLayout {
   packageRoot: string;
@@ -972,10 +975,24 @@ async function startWindowsLoginServiceForShortcut(
     if (config.tray) {
       await openWindowsHelper({ port: config.port, consoleUrl: consoleUrl(config.port) });
     }
-    return await windowsLoginServiceStatusForConfig(config, shortcut);
+    return await waitForWindowsLoginServiceStatus(config, shortcut);
   } finally {
     restore();
   }
+}
+
+async function waitForWindowsLoginServiceStatus(
+  config: WindowsStartupConfig,
+  shortcut: WindowsStartupShortcutStatus
+): Promise<WindowsLoginServiceStatus> {
+  let latest = await windowsLoginServiceStatusForConfig(config, shortcut);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (latest.active && (!config.tray || latest.helperActive)) return latest;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    latest = await windowsLoginServiceStatusForConfig(config, shortcut);
+  }
+  if (latest.active && (!config.tray || latest.helperActive)) return latest;
+  throw new Error(latest.error || "Windows login startup did not remain active after launch.");
 }
 
 export async function stopInstalledWindowsLoginService(): Promise<WindowsLoginServiceStatus> {
@@ -1524,7 +1541,7 @@ function launchWindowsHelper(
       env: windowsEnvironment(url),
       maxBuffer: 64 * 1024,
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: 15_000,
+      timeout: windowsHelperOperationTimeoutMs(defaultWindowsHelperLaunchTimeoutMs),
       windowsHide: true
     }
   );
@@ -1639,7 +1656,7 @@ function stopLaunchedWindowsHelper(
       SGW_HELPER_SCRIPT_PATH: scriptPath
     }),
     stdio: ["ignore", "pipe", "pipe"],
-    timeout: 10_000,
+    timeout: windowsHelperOperationTimeoutMs(defaultWindowsHelperCleanupTimeoutMs),
     windowsHide: true
   });
   if (result.error) {
@@ -1784,6 +1801,14 @@ export function windowsProcessInspectionTimeoutMs(): number {
   return Number.isInteger(configured) && configured > 0 && configured <= maxWindowsProcessInspectionTestTimeoutMs
     ? configured
     : defaultWindowsProcessInspectionTimeoutMs;
+}
+
+export function windowsHelperOperationTimeoutMs(defaultTimeoutMs = defaultWindowsHelperLaunchTimeoutMs): number {
+  if (process.env.SGW_TEST_MODE !== "1") return defaultTimeoutMs;
+  const configured = Number(process.env.SGW_WINDOWS_HELPER_OPERATION_TIMEOUT_MS);
+  return Number.isInteger(configured) && configured > 0 && configured <= maxWindowsHelperOperationTestTimeoutMs
+    ? configured
+    : defaultTimeoutMs;
 }
 
 function windowsHelperInstanceKey(url: string): string {
