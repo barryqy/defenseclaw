@@ -1,4 +1,4 @@
-From e4225946e5193a8c270d617fdf99831d46c60edf Mon Sep 17 00:00:00 2001
+From e1314a8ea6a00d886f4984dbb66ac94f1f4f838e Mon Sep 17 00:00:00 2001
 From: sgateway <299698546+sgateway@users.noreply.github.com>
 Date: Tue, 4 Aug 2026 14:49:39 -0700
 Subject: [PATCH 2/6] Harden DefenseClaw native authorization boundary

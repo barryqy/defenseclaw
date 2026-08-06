@@ -1,4 +1,4 @@
-From a753084737ea4d4f80b343ce528a1bf18c55b5d8 Mon Sep 17 00:00:00 2001
+From 4986b41094b3dcd721cf55722ba5158427b2df4f Mon Sep 17 00:00:00 2001
 From: sgateway <299698546+sgateway@users.noreply.github.com>
 Date: Tue, 4 Aug 2026 14:50:19 -0700
 Subject: [PATCH 3/6] Keep restricted setup help side-effect free
