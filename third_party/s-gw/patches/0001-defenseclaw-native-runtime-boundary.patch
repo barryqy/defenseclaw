@@ -549,7 +549,7 @@ diff --git a/src/unlock.ts b/src/unlock.ts
 index 4d63a3e..4a8868e 100644
 --- a/src/unlock.ts
 +++ b/src/unlock.ts
-@@ -20,23 +20,23 @@ import path from "node:path";
+@@ -20,24 +20,24 @@ import path from "node:path";
  import { fileURLToPath } from "node:url";
  import { getSgwHome, MASTER_KEYCHAIN_SERVICE, SECRET_KEYCHAIN_SERVICE } from "./paths.js";
  import { resolveSelfContainedMacRuntime } from "./self-contained-runtime.js";
@@ -565,7 +565,8 @@ index 4d63a3e..4a8868e 100644
  const keychainRepairTimeoutMs = 10_000;
  const staleKeychainRepairMs = 30_000;
 -const defaultSecretToolTimeoutMs = 10_000;
- const windowsCredentialHelperTimeoutMs = 30_000;
+ const defaultWindowsCredentialHelperTimeoutMs = 30_000;
+ const maxWindowsCredentialHelperTestTimeoutMs = 120_000;
 -const maxSecretToolInputBytes = 8_191;
  
  export interface KeychainInfo {
@@ -822,12 +823,13 @@ index 4d63a3e..4a8868e 100644
  }
  
  function runNativeHelper(helperPath: string, args: string[], input?: string): string {
-@@ -1237,7 +1150,7 @@ function testOnlyHelperOverride(name: string): string | undefined {
+@@ -1237,8 +1150,8 @@ function testOnlyHelperOverride(name: string): string | undefined {
  }
  
  function runWindowsCredentialHelper(helperPath: string, args: string[], input?: string): string {
 -  const powershell = trustedWindowsPowerShellSync();
 +  const powershell = trustedWindowsPowershell();
+   const timeoutMs = windowsCredentialHelperTimeoutMs();
    const result = spawnSync(powershell, [
      "-NoLogo",
      "-NoProfile",
@@ -1200,4 +1202,3 @@ index df5ecc4..89ea7d1 100644
  }
 -- 
 2.50.1 (Apple Git-155)
-
