@@ -758,9 +758,11 @@ $sddl = "O:$($currentSid)D:P" +
     "(A;;FA;;;$currentSid)" +
     "(A;OICI;RC;;;$currentSid)" +
     "(A;OICI;FA;;;SY)"
-$acl = [System.Security.AccessControl.DirectorySecurity]::new()
-$acl.SetSecurityDescriptorSddlForm($sddl)
 $item = Get-Item -LiteralPath $args[0] -Force -ErrorAction Stop
+$sections = [System.Security.AccessControl.AccessControlSections]::Owner -bor `
+    [System.Security.AccessControl.AccessControlSections]::Access
+$acl = $item.GetAccessControl()
+$acl.SetSecurityDescriptorSddlForm($sddl, $sections)
 $item.SetAccessControl($acl)
 """,
         managed,
