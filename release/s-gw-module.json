@@ -5,8 +5,8 @@
   "package_version": "0.2.0",
   "upstream_package_version": "0.1.19",
   "upstream_repository": "https://github.com/sgateway/s-gw.git",
-  "upstream_revision": "2c8455d1413487ccccb2ed4e6853832c82d102e4",
-  "upstream_tree": "c34ebf3aaa2cefa2448cdb2cef45627c0c92cede",
+  "upstream_revision": "a9d9858cdf58ba6625c0b5c2cf0b33bf09fc7568",
+  "upstream_tree": "016561d1b82e4e8d01e0e0813c516825d2895db8",
   "source_path": "third_party/s-gw/upstream",
   "source_inventory": "third_party/s-gw/SOURCE_MANIFEST.json",
   "patches": [
