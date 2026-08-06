@@ -1019,6 +1019,9 @@ def test_registered_mcp_environment_pins_control_environment(monkeypatch):
             "SGW_STOP_CLI_PATH": "/tmp/other-cli",
             "SGW_TEST_MODE": "1",
             "SGW_WINDOWS_ACL_TEST_ROOT": "/tmp/acl-root",
+            "SGW_WINDOWS_CREDENTIAL_HELPER_TIMEOUT_MS": "120000",
+            "SGW_WINDOWS_PROCESS_INSPECTION_TIMEOUT_MS": "120000",
+            "SGW_WINDOWS_STARTUP_OPERATION_TIMEOUT_MS": "120000",
             "SGW_WINDOWS_STARTUP_TEST_ROOT": "/tmp/startup-root",
         }
     )
