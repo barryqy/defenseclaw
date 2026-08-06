@@ -162,11 +162,11 @@
       "size": 16122
     },
     {
-      "git_blob": "acdbb71d9baa2c81dc68481e191e115786575e26",
+      "git_blob": "8020ed0d5752759d46a7e170ef4e4dcefd8aac3c",
       "mode": "100644",
       "path": "src/install.ts",
-      "sha256": "103aa7c952e8636a805f19d4639e7dc175e7a48079bc0aeac31079ad48ca2fea",
-      "size": 96142
+      "sha256": "66a12abc546fff9927054664228f40a7eefafcd27707d9f23e6810aab312ed8c",
+      "size": 99174
     },
     {
       "git_blob": "dde6a858ac8436d259791c90979735dc8fabe8bb",
@@ -310,7 +310,7 @@
     }
   ],
   "repository": "https://github.com/sgateway/s-gw.git",
-  "revision": "40212b60d92dd7c5a7ed6ab4227a5be2c75a32fd",
+  "revision": "a1f27d42119eda3a8af77c1a53e87fd0faef0da4",
   "schema_version": 2,
-  "tree": "a71dac7b17c56e9f2896930c088202411de385d5"
+  "tree": "6e9176c9fe6ce7642dd604a23337776a978ce3ba"
 }

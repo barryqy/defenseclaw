@@ -1,4 +1,4 @@
-From d04095cbbf3135daaa2e815369172ecca6bb1fad Mon Sep 17 00:00:00 2001
+From da7957ce6e99398767fd44a48b0dd8619db05892 Mon Sep 17 00:00:00 2001
 From: sgateway <299698546+sgateway@users.noreply.github.com>
 Date: Tue, 4 Aug 2026 14:49:01 -0700
 Subject: [PATCH 1/6] Apply DefenseClaw native runtime boundary
@@ -412,7 +412,7 @@ index 8ec42f4..bc76f68 100644
  }
  
 diff --git a/src/install.ts b/src/install.ts
-index acdbb71..d175615 100644
+index 8020ed0..68a9fda 100644
 --- a/src/install.ts
 +++ b/src/install.ts
 @@ -28,6 +28,7 @@ import {
@@ -432,7 +432,7 @@ index acdbb71..d175615 100644
  
  export const consoleLabel = "com.s-gw.sgw.console";
  export const menuBarLabel = "com.s-gw.sgw.menubar";
-@@ -701,7 +702,7 @@ export function stopWindowsSurfaces(options: WindowsSurfaceScope = {}): WindowsS
+@@ -703,7 +704,7 @@ export function stopWindowsSurfaces(options: WindowsSurfaceScope = {}): WindowsS
    const clientPath = path.join(windowsScripts, "s-gw-client.ps1");
    const instanceKey = getSgwInstanceKey();
    const helperInstanceKey = windowsHelperInstanceKey(endpoint.baseUrl);
@@ -441,7 +441,7 @@ index acdbb71..d175615 100644
    const script = [
      "$ErrorActionPreference = 'Stop'",
      "$stopped = @()",
-@@ -1145,7 +1146,7 @@ function trustedWindowsConsoleListener(port: number, cliPath: string): number |
+@@ -1175,7 +1176,7 @@ function trustedWindowsConsoleListener(port: number, cliPath: string): number |
      "}",
      "[PSCustomObject]@{ currentSid = $currentSid; currentSessionId = $currentSessionId; processes = $processes } | ConvertTo-Json -Depth 3 -Compress"
    ].join("\n");
@@ -450,7 +450,7 @@ index acdbb71..d175615 100644
    const result = spawnSync(powershell, ["-NoProfile", "-Command", script], {
      cwd: path.dirname(powershell),
      encoding: "utf8",
-@@ -1365,7 +1366,7 @@ export async function openWindowsClient(options: MenuBarOptions = {}): Promise<W
+@@ -1403,7 +1404,7 @@ export async function openWindowsClient(options: MenuBarOptions = {}): Promise<W
    const { port, url } = windowsConsoleEndpoint(options);
    const instanceKey = getSgwInstanceKey();
    await ensureWindowsConsole({ ...options, port, consoleUrl: url });
@@ -459,7 +459,7 @@ index acdbb71..d175615 100644
    const result = spawnSync(
      powershell,
      [
-@@ -1458,7 +1459,7 @@ function launchWindowsHelper(
+@@ -1497,7 +1498,7 @@ function launchWindowsHelper(
    instanceKey: string
  ): WindowsHelperLaunch {
    const launchNonce = randomBytes(32).toString("hex");
@@ -468,7 +468,7 @@ index acdbb71..d175615 100644
    const result = spawnSync(
      powershell,
      [
-@@ -1585,7 +1586,7 @@ function stopLaunchedWindowsHelper(
+@@ -1624,7 +1625,7 @@ function stopLaunchedWindowsHelper(
      "}",
      "throw 'The launched s-gw helper did not stop.'"
    ].join("\n");
@@ -477,9 +477,9 @@ index acdbb71..d175615 100644
    const result = spawnSync(powershell, ["-NoProfile", "-Command", script], {
      cwd: path.dirname(powershell),
      encoding: "utf8",
-@@ -1655,7 +1656,7 @@ function findRunningWindowsHelpers(scriptPath: string, port: number, url: string
-     "}",
-     "[PSCustomObject]@{ currentSid = $currentSid; currentSessionId = $currentSessionId; processes = $helperProcesses } | ConvertTo-Json -Depth 3 -Compress"
+@@ -1724,7 +1725,7 @@ function inspectRunningWindowsHelpers(
+     "} while ($true)",
+     "[PSCustomObject]@{ currentSid = $currentSid; currentSessionId = $currentSessionId; processes = $helperProcesses; stable = $stable } | ConvertTo-Json -Depth 3 -Compress"
    ].join("\n");
 -  const powershell = trustedWindowsPowerShellSync();
 +  const powershell = trustedWindowsPowershell();

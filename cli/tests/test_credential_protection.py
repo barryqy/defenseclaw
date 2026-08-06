@@ -1010,6 +1010,7 @@ def test_registered_mcp_environment_pins_control_environment(monkeypatch):
         {
             "PATH": "/tmp/untrusted-bin",
             "SGW_HOME": "/tmp/other-store",
+            "SGW_HELPER_SETTLE": "1",
             "SGW_LOGIN_SESSION_ID": "foreign-session",
             "SGW_MASTER_PASSPHRASE": "ambient-passphrase",
             "SGW_OP_CLI": "/tmp/fake-op",
