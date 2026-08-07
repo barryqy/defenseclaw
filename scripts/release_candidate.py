@@ -4320,6 +4320,44 @@ def _require_object_fields(
     return value
 
 
+def _contains_mapping_key(value: object, key: str) -> bool:
+    if isinstance(value, dict):
+        return key in value or any(_contains_mapping_key(item, key) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_mapping_key(item, key) for item in value)
+    return False
+
+
+def _validate_windows_authenticode_observation(evidence: object, installed_path: object) -> None:
+    if not isinstance(evidence, dict):
+        raise CandidateError(f"Windows Setup Authenticode evidence is invalid for {installed_path!r}")
+    expected = evidence.get("expected")
+    observed = evidence.get("observed")
+    if not isinstance(expected, dict) or not isinstance(observed, dict):
+        raise CandidateError(f"Windows Setup Authenticode policy evidence is incomplete for {installed_path!r}")
+    policy = expected.get("policy")
+    if policy == "pinned-input-observation":
+        fields = {"status", "embedded_signatures"}
+        mismatch = "Pinned Windows Authenticode observation contains host-selected fields"
+    elif policy in {"defenseclaw-product-publisher", "digest-only-upstream"}:
+        fields = {"status", "publisher", "signature_type", "signer", "timestamp", "embedded_signatures"}
+        mismatch = "Platform Windows Authenticode observation is not canonical"
+    else:
+        raise CandidateError(f"Windows Setup Authenticode observation policy is unsupported for {installed_path!r}")
+    if set(observed) != fields:
+        raise CandidateError(f"{mismatch}: {installed_path!r}")
+    if observed.get("status") != expected.get("status"):
+        raise CandidateError(f"Windows Setup observed Authenticode status differs from policy for {installed_path!r}")
+    if not isinstance(observed.get("embedded_signatures"), list):
+        raise CandidateError(f"Windows Setup embedded Authenticode inventory is invalid for {installed_path!r}")
+    if policy != "pinned-input-observation" and (
+        observed.get("publisher") != expected.get("publisher")
+        or observed.get("signature_type") != expected.get("signature_type")
+        or not isinstance(observed.get("timestamp"), dict)
+    ):
+        raise CandidateError(f"Windows Setup observed Authenticode identity differs from policy for {installed_path!r}")
+
+
 def _read_windows_setup_json(path: Path, label: str) -> dict[str, Any]:
     try:
         info = path.lstat()
@@ -4536,6 +4574,10 @@ def _validate_windows_setup_provenance(
     files = authenticode.get("files")
     if authenticode.get("schema_version") != 1 or not isinstance(files, dict):
         raise CandidateError("Windows Setup Authenticode inventory is invalid")
+    if _contains_mapping_key(files, "chain"):
+        raise CandidateError("Windows Setup Authenticode evidence contains a machine-specific certificate chain")
+    for installed_path, file_evidence in files.items():
+        _validate_windows_authenticode_observation(file_evidence, installed_path)
     evidence = _require_object_fields(
         files.get(WINDOWS_SETUP_ASSET),
         {
@@ -4607,7 +4649,6 @@ def _validate_windows_setup_provenance(
             "publisher",
             "signature_type",
             "signer",
-            "chain",
             "timestamp",
             "embedded_signatures",
         },
@@ -4660,7 +4701,6 @@ def _validate_windows_setup_provenance(
         or observed.get("publisher") != ""
         or observed.get("signature_type") != "None"
         or signer is not None
-        or observed.get("chain") not in (None, [])
         or not isinstance(timestamp, dict)
         or timestamp.get("present") is not False
         or timestamp.get("format") != ""

@@ -505,14 +505,40 @@ def _fixture(tmp_path: Path) -> argparse.Namespace:
     }
     authenticode_files = {}
 
-    def add_evidence(installed_path: str, sbom_name: str, digest: str) -> None:
+    def add_evidence(
+        installed_path: str,
+        sbom_name: str,
+        digest: str,
+        policy: str = "defenseclaw-product-publisher",
+    ) -> None:
+        status = "NotSigned" if policy == "digest-only-upstream" else "Valid"
+        publisher = "Fixture Publisher" if policy == "defenseclaw-product-publisher" else ""
+        signature_type = "None" if policy == "digest-only-upstream" else "Authenticode"
+        observed = {
+            "status": status,
+            "embedded_signatures": [] if policy == "digest-only-upstream" else [{}],
+        }
+        if policy != "pinned-input-observation":
+            observed.update(
+                {
+                    "publisher": publisher,
+                    "signature_type": signature_type,
+                    "signer": None if status == "NotSigned" else {},
+                    "timestamp": {"present": status == "Valid"},
+                }
+            )
         authenticode_files[installed_path] = {
             "schema_version": 1,
             "installed_path": installed_path,
             "sbom_file_name": sbom_name,
             "sha256": digest,
-            "expected": {"policy": "fixture"},
-            "observed": {"status": "Valid", "embedded_signatures": [{}]},
+            "expected": {
+                "policy": policy,
+                "status": status,
+                "publisher": publisher,
+                "signature_type": "" if policy == "pinned-input-observation" else signature_type,
+            },
+            "observed": observed,
         }
 
     add_evidence(setup.name, f"./{setup.name}", component_hashes["setup"])
@@ -539,8 +565,14 @@ def _fixture(tmp_path: Path) -> argparse.Namespace:
         "runtime/python/python.exe",
         "./expanded/python/python.exe",
         hashlib.sha256(b"python").hexdigest(),
+        "pinned-input-observation",
     )
-    add_evidence("runtime/tools/cosign.exe", "./payload/cosign.exe", component_hashes["cosign"])
+    add_evidence(
+        "runtime/tools/cosign.exe",
+        "./payload/cosign.exe",
+        component_hashes["cosign"],
+        "digest-only-upstream",
+    )
     manifest["unsigned"] = False
     manifest["authenticode"] = {
         "schema_version": 1,
@@ -674,6 +706,7 @@ def test_builder_binds_authenticode_inventory_to_payload_provenance_and_sbom() -
     helper = AUTHENTICODE_PS1.read_text(encoding="utf-8")
     assert ". $WindowsAuthenticodeHelper" in build
     assert "Get-DefenseClawAuthenticodeEvidence" in build
+    assert "$releaseAuthenticodeFiles[$entry.Key] = $entry.Value" in build
     assert build.index(". $WindowsAuthenticodeHelper") < build.index("Get-DefenseClawAuthenticodeEvidence")
     assert "schema_version = 2" in build
     assert "authenticode = $releaseAuthenticode" in build
@@ -682,6 +715,11 @@ def test_builder_binds_authenticode_inventory_to_payload_provenance_and_sbom() -
     assert "$provenanceInputs['sgw_sbom_sha256'] = Get-FileHashHex $sgwSbom" in build
     assert "$sbomArguments += @('--sgw-sbom', $sgwSbom)" in build
     assert "function Get-DefenseClawTimestampEvidence" in helper
+    assert "Get-DefenseClawCertificateChainEvidence" not in helper
+    assert "not_before_utc" in helper
+    assert "not_after_utc" in helper
+    assert "$observed['publisher'] = $publisher" in helper
+    assert "$observed['embedded_signatures'] = $embeddedSignatures" in helper
     assert "ExpectedSignerThumbprintSha256" in helper
 
 
@@ -1055,12 +1093,11 @@ def test_signed_release_stages_offline_resource_verifier_before_lifecycle() -> N
     assert release.index(builder) < release.index(lifecycle)
 
 
-def test_offline_chain_and_timeout_helpers_are_strictly_bounded() -> None:
+def test_authenticode_evidence_is_store_independent_and_timeouts_are_bounded() -> None:
     authenticode = AUTHENTICODE_PS1.read_text(encoding="utf-8")
     identity = BINARY_IDENTITY_PS1.read_text(encoding="utf-8")
-    assert "DisableCertificateDownloads" in authenticode
-    assert "$chain.ChainPolicy.DisableCertificateDownloads = $true" in authenticode
-    assert "runtime with cache-only certificate-chain support" in authenticode
+    assert "X509Chain" not in authenticode
+    assert "Get-DefenseClawCertificateChainEvidence" not in authenticode
     assert "$process.WaitForExit($remaining)" in identity
     assert "$drainTask.Wait($remaining)" in identity
     assert "$process.WaitForExit()" not in identity
@@ -1295,6 +1332,108 @@ def test_merged_spdx_covers_exact_and_expanded_windows_payload(tmp_path: Path) -
         file for file in document["files"] if file["fileName"] == "./payload/defenseclaw-hook-launcher.exe"
     )
     assert '"installed_path":"bin/defenseclaw-hook-launcher.exe"' in hook_launcher_file["comment"]
+
+
+def test_sbom_rejects_machine_chain_evidence_in_release_inventory(tmp_path: Path) -> None:
+    args = _fixture(tmp_path)
+    inventory = json.loads(args.authenticode_inventory.read_text(encoding="utf-8"))
+    evidence = inventory["files"]["bin/defenseclaw-hook.exe"]
+    evidence["observed"]["chain"] = {
+        "build_succeeded": True,
+        "statuses": [],
+        "certificates": [{"thumbprint_sha256": "a" * 64}],
+    }
+    evidence["observed"]["embedded_signatures"][0]["chain"] = {
+        "build_succeeded": True,
+        "statuses": [],
+        "certificates": [{"thumbprint_sha256": "b" * 64}],
+    }
+    args.authenticode_inventory.write_text(json.dumps(inventory), encoding="utf-8")
+
+    with pytest.raises(artifacts.ArtifactError, match="Release Authenticode evidence contains"):
+        artifacts.build_sbom(args)
+
+
+def test_sbom_rejects_machine_chain_evidence_in_payload_manifest(tmp_path: Path) -> None:
+    args = _fixture(tmp_path)
+    manifest_path = args.payload_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["authenticode"]["files"]["bin/defenseclaw-hook.exe"]["observed"]["chain"] = {
+        "build_succeeded": True,
+        "statuses": [],
+        "certificates": [],
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    inventory = json.loads(args.authenticode_inventory.read_text(encoding="utf-8"))
+    inventory["files"]["bin/defenseclaw-hook.exe"]["observed"]["chain"] = {
+        "build_succeeded": True,
+        "statuses": [],
+        "certificates": [],
+    }
+    args.authenticode_inventory.write_text(json.dumps(inventory), encoding="utf-8")
+    artifacts.deterministic_zip(args.payload_root, args.embedded_payload, args.source_epoch, include_root=True)
+
+    with pytest.raises(artifacts.ArtifactError, match="machine-specific certificate chains"):
+        artifacts.build_sbom(args)
+
+
+def test_sbom_rejects_pinned_host_selected_observation_fields(tmp_path: Path) -> None:
+    args = _fixture(tmp_path)
+    manifest_path = args.payload_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["authenticode"]["files"]["runtime/python/python.exe"]["observed"]["publisher"] = "ambient"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    inventory = json.loads(args.authenticode_inventory.read_text(encoding="utf-8"))
+    inventory["files"]["runtime/python/python.exe"]["observed"]["publisher"] = "ambient"
+    args.authenticode_inventory.write_text(json.dumps(inventory), encoding="utf-8")
+    artifacts.deterministic_zip(args.payload_root, args.embedded_payload, args.source_epoch, include_root=True)
+
+    with pytest.raises(artifacts.ArtifactError, match="Pinned Authenticode observation contains host-selected"):
+        artifacts.build_sbom(args)
+
+
+def test_sbom_rejects_null_embedded_signature_inventory(tmp_path: Path) -> None:
+    args = _fixture(tmp_path)
+    manifest_path = args.payload_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["authenticode"]["files"]["runtime/python/python.exe"]["observed"]["embedded_signatures"] = None
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    inventory = json.loads(args.authenticode_inventory.read_text(encoding="utf-8"))
+    inventory["files"]["runtime/python/python.exe"]["observed"]["embedded_signatures"] = None
+    args.authenticode_inventory.write_text(json.dumps(inventory), encoding="utf-8")
+    artifacts.deterministic_zip(args.payload_root, args.embedded_payload, args.source_epoch, include_root=True)
+
+    with pytest.raises(artifacts.ArtifactError, match="Invalid embedded Authenticode signature inventory"):
+        artifacts.build_sbom(args)
+
+
+@pytest.mark.parametrize(
+    "installed_path",
+    ["bin/defenseclaw-hook.exe", "runtime/tools/cosign.exe"],
+)
+def test_sbom_requires_product_and_digest_observation_fields(tmp_path: Path, installed_path: str) -> None:
+    args = _fixture(tmp_path)
+    manifest_path = args.payload_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del manifest["authenticode"]["files"][installed_path]["observed"]["signer"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    inventory = json.loads(args.authenticode_inventory.read_text(encoding="utf-8"))
+    del inventory["files"][installed_path]["observed"]["signer"]
+    args.authenticode_inventory.write_text(json.dumps(inventory), encoding="utf-8")
+    artifacts.deterministic_zip(args.payload_root, args.embedded_payload, args.source_epoch, include_root=True)
+
+    with pytest.raises(artifacts.ArtifactError, match="omits enforced fields"):
+        artifacts.build_sbom(args)
+
+
+def test_sbom_rejects_non_chain_release_evidence_drift(tmp_path: Path) -> None:
+    args = _fixture(tmp_path)
+    inventory = json.loads(args.authenticode_inventory.read_text(encoding="utf-8"))
+    inventory["files"]["bin/defenseclaw-hook.exe"]["observed"]["status"] = "NotSigned"
+    args.authenticode_inventory.write_text(json.dumps(inventory), encoding="utf-8")
+
+    with pytest.raises(artifacts.ArtifactError, match="Release and payload Authenticode evidence differ"):
+        artifacts.build_sbom(args)
 
 
 def test_sbom_fails_closed_when_payload_digest_no_longer_matches(tmp_path: Path) -> None:

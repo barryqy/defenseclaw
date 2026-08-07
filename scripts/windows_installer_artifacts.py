@@ -669,6 +669,44 @@ class SpdxDocument:
             raise ArtifactError("SPDX document uses an undeclared extracted license")
 
 
+def _contains_authenticode_chain_evidence(value) -> bool:
+    if isinstance(value, dict):
+        return "chain" in value or any(_contains_authenticode_chain_evidence(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_authenticode_chain_evidence(item) for item in value)
+    return False
+
+
+def _validate_canonical_authenticode_observation(evidence: dict, installed_path: str) -> None:
+    expected = evidence.get("expected")
+    observed = evidence.get("observed")
+    if not isinstance(expected, dict) or not isinstance(observed, dict):
+        raise ArtifactError(f"Incomplete Authenticode policy evidence for {installed_path!r}")
+    policy = expected.get("policy")
+    if policy == "pinned-input-observation":
+        fields = {"status", "embedded_signatures"}
+        mismatch = "Pinned Authenticode observation contains host-selected fields"
+    elif policy in {"defenseclaw-product-publisher", "digest-only-upstream"}:
+        fields = {"status", "publisher", "signature_type", "signer", "timestamp", "embedded_signatures"}
+        mismatch = "Platform Authenticode observation omits enforced fields or contains ambient fields"
+    else:
+        raise ArtifactError(f"Unsupported Authenticode observation policy for {installed_path!r}")
+    if set(observed) != fields:
+        raise ArtifactError(f"{mismatch}: {installed_path!r}")
+    if observed.get("status") != expected.get("status"):
+        raise ArtifactError(f"Observed Authenticode status differs from policy for {installed_path!r}")
+    embedded = observed.get("embedded_signatures")
+    if not isinstance(embedded, list):
+        raise ArtifactError(f"Invalid embedded Authenticode signature inventory for {installed_path!r}")
+    if policy != "pinned-input-observation":
+        if (
+            observed.get("publisher") != expected.get("publisher")
+            or observed.get("signature_type") != expected.get("signature_type")
+            or not isinstance(observed.get("timestamp"), dict)
+        ):
+            raise ArtifactError(f"Observed Authenticode platform identity differs from policy for {installed_path!r}")
+
+
 def _attach_authenticode_evidence(document: SpdxDocument, inventory_path: Path, payload_manifest: dict) -> int:
     inventory = json.loads(inventory_path.resolve(strict=True).read_text(encoding="utf-8-sig"))
     files = inventory.get("files")
@@ -687,6 +725,10 @@ def _attach_authenticode_evidence(document: SpdxDocument, inventory_path: Path, 
     expected_release_paths = {"DefenseClawSetup-x64.exe", *payload_files}
     if set(files) != expected_release_paths:
         raise ArtifactError("Release and payload Authenticode inventory paths differ")
+    if any(_contains_authenticode_chain_evidence(evidence) for evidence in payload_files.values()):
+        raise ArtifactError("Payload Authenticode evidence contains machine-specific certificate chains")
+    if any(_contains_authenticode_chain_evidence(evidence) for evidence in files.values()):
+        raise ArtifactError("Release Authenticode evidence contains machine-specific certificate chains")
     if any(files[name] != evidence for name, evidence in payload_files.items()):
         raise ArtifactError("Release and payload Authenticode evidence differ")
 
@@ -730,6 +772,7 @@ def _attach_authenticode_evidence(document: SpdxDocument, inventory_path: Path, 
             raise ArtifactError(f"Invalid Authenticode SHA-256 for {installed_path!r}")
         if not isinstance(evidence.get("expected"), dict) or not isinstance(evidence.get("observed"), dict):
             raise ArtifactError(f"Incomplete Authenticode policy evidence for {installed_path!r}")
+        _validate_canonical_authenticode_observation(evidence, installed_path)
         grouped[sbom_name].append(evidence)
 
     if "./DefenseClawSetup-x64.exe" not in grouped:
