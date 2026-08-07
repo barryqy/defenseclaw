@@ -1453,7 +1453,7 @@ function Invoke-BuildArtifacts {
                 Invoke-WindowsNativeProcess $go @(
                     'build', '-trimpath', '-buildvcs=false', '-ldflags', $binary[2],
                     '-o', $target, $binary[1]
-                ) -TimeoutSeconds 900 | Out-Null
+                ) -TimeoutSeconds 900 -WorkingDirectory $WorkspaceRoot | Out-Null
                 Assert-WindowsExecutableResource -Path $target -Component $binary[3] -Version $packageVersion -Apply
             }
             $primaryHash = (Get-FileHash -LiteralPath (Join-Path $stage $binary[0]) -Algorithm SHA256).Hash
