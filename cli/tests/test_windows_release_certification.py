@@ -754,6 +754,18 @@ def test_native_go_builds_run_from_the_requested_workspace() -> None:
         assert call.count("-WorkingDirectory $WorkspaceRoot") == 1
 
 
+def test_native_installer_build_runs_from_the_requested_workspace() -> None:
+    build = _function("Invoke-BuildInstaller")
+    uv_calls = re.findall(
+        r"(?ms)^\s*Invoke-WindowsNativeProcess \$uv @\(.*?"
+        r"^\s*\) -TimeoutSeconds \d+[^\r\n]*\| Out-Null",
+        build,
+    )
+
+    assert len(uv_calls) == 1
+    assert uv_calls[0].count("-WorkingDirectory $WorkspaceRoot") == 1
+
+
 def test_native_wheel_stage_copies_local_pep517_build_inputs() -> None:
     stage = _function("Copy-PackageBuildInputs")
     build = _function("Invoke-BuildArtifacts")

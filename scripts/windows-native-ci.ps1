@@ -1608,7 +1608,7 @@ function Invoke-BuildInstaller {
     Invoke-WindowsNativeProcess $uv @(
         'run', '--frozen', 'python', (Join-Path $WorkspaceRoot 'scripts\generate-upgrade-manifest.py'),
         '--out', (Join-Path $artifacts 'upgrade-manifest.json')
-    ) -TimeoutSeconds 120 | Out-Null
+    ) -TimeoutSeconds 120 -WorkingDirectory $WorkspaceRoot | Out-Null
     & (Join-Path $WorkspaceRoot 'scripts\build-windows-installer.ps1') `
         -DistRoot $artifacts -OutRoot $artifacts -StateRoot (Join-Path $root 'installer-build') `
         -DistributionFlavor 'oss' `
