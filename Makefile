@@ -3,7 +3,7 @@ GATEWAY     := defenseclaw-gateway
 HOOK_LAUNCHER := defenseclaw-hook
 VERSION     := 0.8.6
 .DEFAULT_GOAL := help
-GOFLAGS     := -ldflags "-X main.version=$(VERSION)"
+GO_BUILD_ARGS := -ldflags "-X main.version=$(VERSION)"
 VENV        := .venv
 GOBIN       ?= $(shell go env GOPATH)/bin
 PLUGIN_DIR  := extensions/defenseclaw
@@ -440,7 +440,7 @@ proto-check: proto
 		internal/guardrail/semanticpb/facts.pb.go
 
 gateway: sync-openclaw-extension
-	go build $(GOFLAGS) -o $(GATEWAY)$(EXE) ./cmd/defenseclaw
+	go build $(GO_BUILD_ARGS) -o $(GATEWAY)$(EXE) ./cmd/defenseclaw
 	$(if $(filter Windows_NT,$(OS)),go run ./internal/tools/windowsresources -target windows_amd64 -executable $(GATEWAY)$(EXE) -component gateway -version $(VERSION) -icon "$(CURDIR)/macos/DefenseClawMac/DefenseClawMac/Assets.xcassets/AppIcon.appiconset/icon_256.png",)
 	@echo "Built $(GATEWAY)$(EXE)"
 	@echo "  Run with: ./$(GATEWAY)$(EXE)"
@@ -464,22 +464,21 @@ endif
 # Best-effort: a fresh clone has no extensions/defenseclaw/dist/ until
 # `make plugin` runs. Forcing every gateway build to first run npm
 # would block non-OpenClaw operators (zeptoclaw, codex, claude code)
-# who don't need the plugin at all. Instead we drop a placeholder file
-# so //go:embed has at least one entry, and the OpenClaw connector
-# detects the placeholder at runtime and returns a clear error when
-# `Setup` is called for OpenClaw without a built plugin. Operators who
-# actually want OpenClaw run `make extensions` (or `make plugin`) first.
+# who don't need the plugin at all. The tracked placeholder keeps the
+# //go:embed directory valid in a fresh checkout and remains beside generated
+# bundles so the source tree stays clean. The connector uses package.json,
+# not the marker, to decide whether the plugin is available. Operators who
+# want OpenClaw run `make extensions` (or `make plugin`) first.
 sync-openclaw-extension:
 	@set -e; \
 	embed_dir=internal/gateway/connector/openclaw_extension; \
 	plugin_dist=$(PLUGIN_DIR)/dist; \
+	placeholder_text='This tracked marker keeps the OpenClaw embed directory available to go:embed.'; \
 	if [ ! -d "$$plugin_dist" ] || [ -z "$$(ls -A "$$plugin_dist" 2>/dev/null)" ]; then \
 	  if [ -f "$$embed_dir/.placeholder" ] || [ ! -d "$$embed_dir" ] \
 	      || [ -z "$$(ls -A "$$embed_dir" 2>/dev/null | grep -v '^\.placeholder$$' || true)" ]; then \
 	    mkdir -p "$$embed_dir"; \
-	    printf '%s\n' "OpenClaw extension not built." \
-	      "Run 'make extensions' (or 'make plugin') to populate the embedded tree." \
-	      > "$$embed_dir/.placeholder"; \
+	    printf '%s\n' "$$placeholder_text" > "$$embed_dir/.placeholder"; \
 	    echo "  • OpenClaw extension dist/ missing — embedded a placeholder (run 'make extensions' to enable OpenClaw)"; \
 	  else \
 	    echo "  • OpenClaw extension dist/ missing — keeping the previously synced tree under $$embed_dir/"; \
@@ -488,6 +487,7 @@ sync-openclaw-extension:
 	fi; \
 	rm -rf "$$embed_dir"; \
 	mkdir -p "$$embed_dir/node_modules"; \
+	printf '%s\n' "$$placeholder_text" > "$$embed_dir/.placeholder"; \
 	cp $(PLUGIN_DIR)/package.json "$$embed_dir/"; \
 	cp $(PLUGIN_DIR)/openclaw.plugin.json "$$embed_dir/"; \
 	if command -v rsync >/dev/null 2>&1; then \
@@ -523,7 +523,7 @@ gateway-cross: sync-openclaw-extension
 	@if [ "$(GOOS)" = "windows" ] && [ "$(GOARCH)" != "amd64" ]; then \
 		echo "native Windows release resources currently certify only GOARCH=amd64" >&2; exit 1; \
 	fi
-	GOOS=$(GOOS) GOARCH=$(GOARCH) go build $(GOFLAGS) -o $(BINARY)-$(GOOS)-$(GOARCH) ./cmd/defenseclaw
+	GOOS=$(GOOS) GOARCH=$(GOARCH) go build $(GO_BUILD_ARGS) -o $(BINARY)-$(GOOS)-$(GOARCH) ./cmd/defenseclaw
 	@if [ "$(GOOS)" = "windows" ]; then \
 		go run ./internal/tools/windowsresources -target windows_$(GOARCH) \
 			-executable $(BINARY)-$(GOOS)-$(GOARCH) -component gateway -version $(VERSION) \
