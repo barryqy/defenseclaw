@@ -31,7 +31,8 @@ until the same change is accepted in the standalone s-gw repository. Never
 edit `upstream/` directly.
 
 The upstream mirror pins the cross-platform credential-store, lifecycle
-parity, and independent Windows helper lifetime work from `sgateway/s-gw#74`.
+parity, independent Windows helper lifetime work, and macOS Keychain alert-noise
+hardening through standalone commit `9cbe37e`.
 The current patch queue advances the integrated module to 0.2.0, replaces the
 standalone Linux Secret Service CLI with the packaged helper contract, and
 keeps restricted setup help side-effect

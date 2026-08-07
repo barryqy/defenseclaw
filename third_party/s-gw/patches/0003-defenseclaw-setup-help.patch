@@ -1,7 +1,7 @@
-From 4986b41094b3dcd721cf55722ba5158427b2df4f Mon Sep 17 00:00:00 2001
+From 586cf3aeab6a94426c08762bc865225ab1b1464c Mon Sep 17 00:00:00 2001
 From: sgateway <299698546+sgateway@users.noreply.github.com>
 Date: Tue, 4 Aug 2026 14:50:19 -0700
-Subject: [PATCH 3/6] Keep restricted setup help side-effect free
+Subject: [PATCH 3/7] Keep restricted setup help side-effect free
 
 ---
  src/cli.ts                        | 21 +++++------

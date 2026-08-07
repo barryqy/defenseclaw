@@ -33,8 +33,14 @@ Current queue:
    login-start route before store construction, binds the host-selected
    PowerShell to the kernel-derived canonical executable by file identity, and
    keeps the DefenseClaw trust tests aligned with the shared Windows path helper.
+7. `0007-defenseclaw-macos-keychain-status.patch` uses the reviewed macOS
+   credential helper's metadata-only `status` operation instead of requiring
+   the standalone app's separately packaged Keychain inspector. It also locks
+   the integrated runtime tests to exact-argv reusable approvals and the direct
+   `/usr/bin/security` execution denial from standalone commit `9cbe37e`.
 
 The pinned upstream revision includes the standalone cross-platform parity,
-dependency refresh, credential-source metadata, portable test launcher, and
-side-effect-free setup help and Windows helper lifetime work from
-`sgateway/s-gw#74`. The queue contains only DefenseClaw host adaptations.
+dependency refresh, credential-source metadata, portable test launcher,
+side-effect-free setup help, Windows helper lifetime work, and macOS Keychain
+alert-noise hardening through standalone commit `9cbe37e`. The queue contains
+only DefenseClaw host adaptations.

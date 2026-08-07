@@ -1,7 +1,7 @@
-From a69ca8aec43f166193eb8b71b3debf2de6a03cc3 Mon Sep 17 00:00:00 2001
+From 9833b646b6fa87a5c4fc601a5908c49393ac5af8 Mon Sep 17 00:00:00 2001
 From: sgateway <299698546+sgateway@users.noreply.github.com>
 Date: Tue, 4 Aug 2026 14:53:42 -0700
-Subject: [PATCH 4/6] Adapt Windows launch trust to current upstream
+Subject: [PATCH 4/7] Adapt Windows launch trust to current upstream
 
 ---
  tests/defenseclaw-runtime.test.ts | 8 ++++----

@@ -1,7 +1,7 @@
-From 642b5289f72bdcf851b41ab77014a739b3cbc616 Mon Sep 17 00:00:00 2001
+From ee75dcb5c80012b1bcb818c566b5a7b4788f7da0 Mon Sep 17 00:00:00 2001
 From: barry <bayuan@cisco.com>
 Date: Wed, 5 Aug 2026 09:44:30 -0700
-Subject: [PATCH 6/6] Adapt DefenseClaw boundary to standalone parity
+Subject: [PATCH 6/7] Adapt DefenseClaw boundary to standalone parity
 
 ---
  src/cli.ts                        |  4 +++
