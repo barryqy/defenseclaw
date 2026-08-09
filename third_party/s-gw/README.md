@@ -32,7 +32,8 @@ edit `upstream/` directly.
 
 The upstream mirror pins the cross-platform credential-store, lifecycle
 parity, independent Windows helper lifetime work, and macOS Keychain alert-noise
-hardening through standalone commit `9cbe37e`.
+hardening through standalone commit `9cbe37e`, plus the Linux Preview support
+documentation correction at `a9ffa79`.
 The current patch queue advances the integrated module to 0.2.0, replaces the
 standalone Linux Secret Service CLI with the packaged helper contract, and
 keeps restricted setup help side-effect

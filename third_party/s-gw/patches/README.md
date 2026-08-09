@@ -41,6 +41,7 @@ Current queue:
 
 The pinned upstream revision includes the standalone cross-platform parity,
 dependency refresh, credential-source metadata, portable test launcher,
-side-effect-free setup help, Windows helper lifetime work, and macOS Keychain
-alert-noise hardening through standalone commit `9cbe37e`. The queue contains
-only DefenseClaw host adaptations.
+side-effect-free setup help, Windows helper lifetime work, macOS Keychain
+alert-noise hardening through standalone commit `9cbe37e`, and the Linux Preview
+support documentation correction at `a9ffa79`. The queue contains only
+DefenseClaw host adaptations.
