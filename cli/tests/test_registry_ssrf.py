@@ -440,7 +440,7 @@ class TestPinnedGetaddrinfo(unittest.TestCase):
 
         self.assertEqual(calls, [])
 
-    def test_analyzer_dns_scope_allows_unrelated_host_and_resets(self):
+    def test_analyzer_dns_scope_allows_public_host_and_resets(self):
         calls = []
 
         def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
@@ -464,6 +464,73 @@ class TestPinnedGetaddrinfo(unittest.TestCase):
 
         self.assertEqual(calls, [("analyzer.example", 443)])
         self.assertEqual({info[4][0] for info in infos}, {"8.8.8.8"})
+
+    def test_analyzer_dns_scope_rejects_unconfigured_private_host(self):
+        for address in (
+            "127.0.0.1",
+            "10.0.0.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "::ffff:127.0.0.1",
+        ):
+            with self.subTest(address=address):
+                calls = []
+
+                def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+                    calls.append((host, port))
+                    return [
+                        (
+                            socket.AF_INET,
+                            type or socket.SOCK_STREAM,
+                            proto,
+                            "",
+                            (address, port),
+                        )
+                    ]
+
+                with patch.object(socket, "getaddrinfo", fake_getaddrinfo):
+                    with pinned_getaddrinfo("rebind.example", 443, "93.184.216.34"):
+                        with analyzer_dns_resolution("trusted.internal"):
+                            with self.assertRaises(SSRFError):
+                                socket.getaddrinfo("redirect.example", 443)
+
+                self.assertEqual(calls, [("redirect.example", 443)])
+
+    def test_analyzer_dns_scope_allows_configured_private_host_only(self):
+        calls = []
+
+        def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+            calls.append((host, port))
+            return [
+                (
+                    socket.AF_INET,
+                    type or socket.SOCK_STREAM,
+                    proto,
+                    "",
+                    ("127.0.0.1", port),
+                )
+            ]
+
+        with patch.object(socket, "getaddrinfo", fake_getaddrinfo):
+            with pinned_getaddrinfo("rebind.example", 443, "93.184.216.34"):
+                with analyzer_dns_resolution("analyzer.internal"):
+                    infos = socket.getaddrinfo("analyzer.internal", 443)
+
+        self.assertEqual(calls, [("analyzer.internal", 443)])
+        self.assertEqual({info[4][0] for info in infos}, {"127.0.0.1"})
+
+    def test_analyzer_dns_scope_rejects_mixed_public_private_answers(self):
+        def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, proto, "", ("8.8.8.8", port)),
+                (socket.AF_INET, socket.SOCK_STREAM, proto, "", ("127.0.0.1", port)),
+            ]
+
+        with patch.object(socket, "getaddrinfo", fake_getaddrinfo):
+            with pinned_getaddrinfo("rebind.example", 443, "93.184.216.34"):
+                with analyzer_dns_resolution():
+                    with self.assertRaises(SSRFError):
+                        socket.getaddrinfo("redirect.example", 443)
 
     def test_analyzer_dns_scope_resets_on_exception(self):
         with pinned_getaddrinfo("rebind.example", 443, "93.184.216.34"):
@@ -545,11 +612,6 @@ class TestPinnedGetaddrinfo(unittest.TestCase):
         anyio.run(check_restoration)
 
     def test_overlapping_async_pin_scopes_restore_after_last_exit(self):
-        try:
-            __import__("uvloop")
-        except ImportError:
-            self.skipTest("uvloop is not installed")
-
         async def check_overlap():
             loop = asyncio.get_running_loop()
             had_override = "getaddrinfo" in vars(loop)
@@ -575,10 +637,12 @@ class TestPinnedGetaddrinfo(unittest.TestCase):
             self.assertEqual("getaddrinfo" in vars(loop), had_override)
 
         with pinned_getaddrinfo("rebind.example", 443, "93.184.216.34"):
-            anyio.run(
-                check_overlap,
-                backend_options={"use_uvloop": True},
-            )
+            anyio.run(check_overlap)
+            try:
+                __import__("uvloop")
+            except ImportError:
+                return
+            anyio.run(check_overlap, backend_options={"use_uvloop": True})
 
     def test_async_pin_covers_uvloop(self):
         try:

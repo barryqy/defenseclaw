@@ -40,6 +40,8 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+import idna
+
 # RFC 6598 carrier-grade NAT range. Python's ``ipaddress.is_private``
 # does NOT include this block — it predates RFC 6598 — so we have to
 # match it explicitly to stay in lockstep with the Go-side gateway
@@ -148,8 +150,6 @@ def _canonical_dns_host(host: str | bytes | None) -> str:
     try:
         encoded = value.encode("ascii")
     except UnicodeEncodeError:
-        import idna
-
         try:
             encoded = idna.encode(value, uts46=True)
         except idna.IDNAError as exc:
@@ -310,11 +310,12 @@ def resolve_and_pin(
 # :func:`socket.getaddrinfo`, so pinning there covers every client.
 
 _GETADDRINFO_PIN_LOCK = threading.Lock()
-_ANALYZER_DNS_ALLOWED: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "defenseclaw_analyzer_dns_allowed",
-    default=False,
-)
 _MISSING_LOOP_RESOLVER = object()
+
+
+@dataclass(frozen=True)
+class _AnalyzerDNSPolicy:
+    trusted_hosts: frozenset[str]
 
 
 @dataclass
@@ -323,6 +324,12 @@ class _AsyncResolverPinState:
     original_override: object
 
 
+_ANALYZER_DNS_POLICY: contextvars.ContextVar[_AnalyzerDNSPolicy | None] = (
+    contextvars.ContextVar(
+        "defenseclaw_analyzer_dns_policy",
+        default=None,
+    )
+)
 _ASYNC_RESOLVER_STATES: weakref.WeakKeyDictionary[
     asyncio.AbstractEventLoop, _AsyncResolverPinState
 ] = weakref.WeakKeyDictionary()
@@ -330,13 +337,22 @@ _ASYNC_RESOLVER_STATE_LOCK = threading.Lock()
 
 
 @contextlib.contextmanager
-def analyzer_dns_resolution() -> Iterator[None]:
-    """Let a configured scanner analyzer resolve its service endpoint."""
-    token = _ANALYZER_DNS_ALLOWED.set(True)
+def analyzer_dns_resolution(*trusted_hosts: str | bytes) -> Iterator[None]:
+    """Allow analyzer DNS without opening a private-network bypass.
+
+    Explicitly configured analyzer endpoint hosts are trusted, including
+    private endpoints selected by the operator. Other hosts (for example a
+    provider default or redirect) may resolve only to public addresses. The
+    task-local policy keeps concurrent MCP transport lookups fail closed.
+    """
+    current = _ANALYZER_DNS_POLICY.get()
+    inherited = current.trusted_hosts if current is not None else frozenset()
+    trusted = inherited.union(_canonical_dns_host(host) for host in trusted_hosts)
+    token = _ANALYZER_DNS_POLICY.set(_AnalyzerDNSPolicy(trusted))
     try:
         yield
     finally:
-        _ANALYZER_DNS_ALLOWED.reset(token)
+        _ANALYZER_DNS_POLICY.reset(token)
 
 
 @contextlib.asynccontextmanager
@@ -430,8 +446,9 @@ def pinned_getaddrinfo(host: str, port: int, ip: str) -> Iterator[None]:
             except ValueError:
                 pass
             if not matches_pin:
-                if _ANALYZER_DNS_ALLOWED.get():
-                    return original(
+                analyzer_policy = _ANALYZER_DNS_POLICY.get()
+                if analyzer_policy is not None:
+                    results = original(
                         host,
                         port,
                         family,
@@ -439,6 +456,36 @@ def pinned_getaddrinfo(host: str, port: int, ip: str) -> Iterator[None]:
                         proto,
                         flags,
                     )
+                    if asked in analyzer_policy.trusted_hosts:
+                        return results
+
+                    for result in results:
+                        try:
+                            resolved = _normalize_ip(
+                                ipaddress.ip_address(str(result[4][0]))
+                            )
+                        except (IndexError, TypeError, ValueError) as exc:
+                            raise SSRFError(
+                                f"analyzer DNS for {asked!r} returned an invalid address"
+                            ) from exc
+                        if (
+                            resolved.is_loopback
+                            or resolved.is_link_local
+                            or resolved.is_private
+                            or resolved.is_multicast
+                            or resolved.is_unspecified
+                            or resolved.is_reserved
+                            or resolved in _CLOUD_METADATA_IPS
+                            or (
+                                resolved.version == 4
+                                and resolved in _CGNAT_NETWORK
+                            )
+                        ):
+                            raise SSRFError(
+                                f"analyzer DNS for unconfigured host {asked!r} "
+                                f"resolved to disallowed address {resolved}"
+                            )
+                    return results
                 raise SSRFError(
                     f"unexpected DNS resolution for {asked!r} during pinned "
                     f"fetch of {target_host!r} (possible DNS rebinding)"

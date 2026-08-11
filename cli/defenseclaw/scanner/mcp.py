@@ -43,6 +43,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, TypeVar
+from urllib.parse import urlparse
 
 from defenseclaw.config import (
     CiscoAIDefenseConfig,
@@ -841,19 +842,39 @@ def _inspect_to_llm(il: InspectLLMConfig) -> LLMConfig:
     )
 
 
-def _scope_network_analyzer_dns(scanner: object) -> None:
-    """Keep analyzer traffic separate from the pinned MCP transport."""
-    for attr_name in ("_api_analyzer", "_llm_analyzer"):
+def _scope_network_analyzer_dns(
+    scanner: object,
+    *,
+    api_endpoint: str,
+    llm_base_url: str,
+) -> None:
+    """Keep analyzer traffic separate without allowing private redirects."""
+    endpoint_by_analyzer = {
+        "_api_analyzer": api_endpoint,
+        "_llm_analyzer": llm_base_url,
+    }
+    for attr_name, endpoint in endpoint_by_analyzer.items():
         analyzer = getattr(scanner, attr_name, None)
         analyze = getattr(analyzer, "analyze", None)
         if not callable(analyze):
             continue
 
-        async def run_analyzer(*args, _analyze=analyze, **kwargs):
-            with analyzer_dns_resolution():
+        try:
+            endpoint_host = urlparse(endpoint).hostname if endpoint else None
+        except ValueError:
+            endpoint_host = None
+        trusted_hosts = (endpoint_host,) if endpoint_host else ()
+
+        async def run_analyzer(
+            *args,
+            _analyze=analyze,
+            _trusted_hosts=trusted_hosts,
+            **kwargs,
+        ):
+            with analyzer_dns_resolution(*_trusted_hosts):
                 return await _analyze(*args, **kwargs)
 
-        setattr(analyzer, "analyze", run_analyzer)
+        analyzer.analyze = run_analyzer
 
 
 async def _run_with_pinned_dns(scan: Awaitable[_T]) -> _T:
@@ -1024,7 +1045,11 @@ class MCPScannerWrapper:
         )
 
         scanner = MCPSDKScanner(sdk_config)
-        _scope_network_analyzer_dns(scanner)
+        _scope_network_analyzer_dns(
+            scanner,
+            api_endpoint=aid.endpoint,
+            llm_base_url=llm.base_url,
+        )
         analyzers = self._parse_analyzers(AnalyzerEnum)
 
         start = time.monotonic()
