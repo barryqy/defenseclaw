@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import platform
 import socket
 import sys
 import unittest
@@ -37,6 +38,11 @@ from defenseclaw.registries.ssrf import (
     pinned_async_getaddrinfo,
     pinned_getaddrinfo,
     resolve_and_pin,
+)
+
+_UVLOOP_SUPPORTED = (
+    sys.platform not in {"win32", "cygwin"}
+    and platform.python_implementation() != "PyPy"
 )
 
 
@@ -611,6 +617,59 @@ class TestPinnedGetaddrinfo(unittest.TestCase):
 
         anyio.run(check_restoration)
 
+    def test_async_getaddrinfo_restored_on_cancellation(self):
+        async def check_restoration():
+            loop = asyncio.get_running_loop()
+            original = loop.getaddrinfo
+            had_override = "getaddrinfo" in vars(loop)
+            entered = asyncio.Event()
+
+            async def hold_scope():
+                async with pinned_async_getaddrinfo():
+                    entered.set()
+                    await asyncio.Event().wait()
+
+            task = asyncio.create_task(hold_scope())
+            await entered.wait()
+            self.assertNotEqual(loop.getaddrinfo, original)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            self.assertEqual(loop.getaddrinfo, original)
+            self.assertEqual("getaddrinfo" in vars(loop), had_override)
+
+        with pinned_getaddrinfo("rebind.example", 443, "93.184.216.34"):
+            anyio.run(check_restoration)
+            if _UVLOOP_SUPPORTED:
+                anyio.run(
+                    check_restoration,
+                    backend_options={"use_uvloop": True},
+                )
+
+    def test_async_pin_preserves_instance_resolver_override(self):
+        async def check_restoration():
+            loop = asyncio.get_running_loop()
+
+            async def previous_resolver(*_args, **_kwargs):
+                return []
+
+            loop.getaddrinfo = previous_resolver
+            try:
+                self.assertIs(vars(loop)["getaddrinfo"], previous_resolver)
+                async with pinned_async_getaddrinfo():
+                    self.assertIsNot(loop.getaddrinfo, previous_resolver)
+                self.assertIs(loop.getaddrinfo, previous_resolver)
+            finally:
+                del loop.getaddrinfo
+
+        with pinned_getaddrinfo("rebind.example", 443, "93.184.216.34"):
+            anyio.run(check_restoration)
+            if _UVLOOP_SUPPORTED:
+                anyio.run(
+                    check_restoration,
+                    backend_options={"use_uvloop": True},
+                )
+
     def test_overlapping_async_pin_scopes_restore_after_last_exit(self):
         async def check_overlap():
             loop = asyncio.get_running_loop()
@@ -638,17 +697,14 @@ class TestPinnedGetaddrinfo(unittest.TestCase):
 
         with pinned_getaddrinfo("rebind.example", 443, "93.184.216.34"):
             anyio.run(check_overlap)
-            try:
-                __import__("uvloop")
-            except ImportError:
-                return
-            anyio.run(check_overlap, backend_options={"use_uvloop": True})
+            if _UVLOOP_SUPPORTED:
+                anyio.run(check_overlap, backend_options={"use_uvloop": True})
 
+    @unittest.skipUnless(
+        _UVLOOP_SUPPORTED,
+        "uvloop does not support Windows, Cygwin, or PyPy",
+    )
     def test_async_pin_covers_uvloop(self):
-        try:
-            __import__("uvloop")
-        except ImportError:
-            self.skipTest("uvloop is not installed")
         calls = []
 
         def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):

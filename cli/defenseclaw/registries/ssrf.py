@@ -393,6 +393,10 @@ async def pinned_async_getaddrinfo() -> AsyncIterator[None]:
         else:
             state.users += 1
 
+    # There is no await between registering this scope and yielding it, so
+    # cancellation cannot strand a registered-but-unentered user. Once the
+    # caller enters, normal task cancellation and BaseException paths unwind
+    # the scope through this finally block.
     try:
         yield
     finally:

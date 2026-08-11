@@ -17,7 +17,8 @@ import socket
 import sys
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -25,9 +26,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import anyio
 import pytest
 import uvicorn
-from defenseclaw.config import CiscoAIDefenseConfig, MCPScannerConfig
-from defenseclaw.registries.ssrf import SSRFError
-from defenseclaw.scanner.mcp import MCPScannerWrapper
+from defenseclaw.config import CiscoAIDefenseConfig, LLMConfig, MCPScannerConfig
+from defenseclaw.registries.ssrf import SSRFError, pinned_getaddrinfo
+from defenseclaw.scanner.mcp import (
+    MCPScannerWrapper,
+    _run_with_pinned_dns,
+    _scope_network_analyzer_dns,
+)
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -35,6 +40,99 @@ pytestmark = pytest.mark.skipif(
     sys.version_info < (3, 11),
     reason="cisco-ai-mcp-scanner requires Python 3.11 or newer",
 )
+
+
+def test_pinned_dns_enters_before_scan_coroutine_is_created():
+    factory_called = False
+
+    def make_scan():
+        nonlocal factory_called
+        factory_called = True
+
+        async def scan():
+            return []
+
+        return scan()
+
+    @asynccontextmanager
+    async def fail_on_entry():
+        raise RuntimeError("pin entry failed")
+        yield  # pragma: no cover
+
+    with (
+        patch(
+            "defenseclaw.scanner.mcp.pinned_async_getaddrinfo",
+            fail_on_entry,
+        ),
+        pytest.raises(RuntimeError, match="pin entry failed"),
+    ):
+        anyio.run(_run_with_pinned_dns, make_scan)
+
+    assert not factory_called
+
+
+@pytest.mark.parametrize(
+    ("provider", "allows_loopback_default"),
+    [
+        pytest.param("ollama", True, id="local-provider"),
+        pytest.param("anthropic", False, id="cloud-provider"),
+    ],
+)
+def test_only_local_provider_default_can_resolve_loopback(
+    provider,
+    allows_loopback_default,
+):
+    calls: list[str] = []
+
+    def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        node = host.decode("ascii") if isinstance(host, bytes) else str(host)
+        calls.append(node)
+        address = "127.0.0.1" if node in {"localhost", "redirect.invalid"} else node
+        return [
+            (
+                socket.AF_INET,
+                type or socket.SOCK_STREAM,
+                proto,
+                "",
+                (address, port),
+            )
+        ]
+
+    class LocalAnalyzer:
+        async def analyze(self):
+            with pytest.raises(SSRFError):
+                await anyio.getaddrinfo("redirect.invalid", 11434)
+            return await anyio.getaddrinfo("localhost", 11434)
+
+    scanner = SimpleNamespace(
+        _api_analyzer=None,
+        _llm_analyzer=LocalAnalyzer(),
+    )
+    llm = LLMConfig(provider=provider, model="test-model")
+    _scope_network_analyzer_dns(
+        scanner,
+        api_endpoint="",
+        llm_base_url=llm.base_url,
+        llm_uses_local_default=llm.is_local_provider(),
+    )
+
+    with patch.object(socket, "getaddrinfo", fake_getaddrinfo):
+        with pinned_getaddrinfo("rebind.example", 443, "93.184.216.34"):
+            if allows_loopback_default:
+                results = anyio.run(
+                    _run_with_pinned_dns,
+                    scanner._llm_analyzer.analyze,
+                )
+            else:
+                with pytest.raises(SSRFError):
+                    anyio.run(
+                        _run_with_pinned_dns,
+                        scanner._llm_analyzer.analyze,
+                    )
+
+    if allows_loopback_default:
+        assert {info[4][0] for info in results} == {"127.0.0.1"}
+    assert calls == ["redirect.invalid", "localhost"]
 
 
 @contextmanager

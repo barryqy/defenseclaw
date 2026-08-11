@@ -38,7 +38,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from collections.abc import Awaitable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -847,6 +847,7 @@ def _scope_network_analyzer_dns(
     *,
     api_endpoint: str,
     llm_base_url: str,
+    llm_uses_local_default: bool,
 ) -> None:
     """Keep analyzer traffic separate without allowing private redirects."""
     endpoint_by_analyzer = {
@@ -863,7 +864,16 @@ def _scope_network_analyzer_dns(
             endpoint_host = urlparse(endpoint).hostname if endpoint else None
         except ValueError:
             endpoint_host = None
-        trusted_hosts = (endpoint_host,) if endpoint_host else ()
+        if endpoint_host:
+            trusted_hosts = (endpoint_host,)
+        elif attr_name == "_llm_analyzer" and llm_uses_local_default:
+            # LiteLLM's built-in local-provider endpoints use loopback when
+            # no explicit base URL is configured. Trust only those literal
+            # default host spellings; redirects and unrelated private names
+            # still pass through analyzer_dns_resolution's public-IP policy.
+            trusted_hosts = ("localhost", "127.0.0.1", "::1")
+        else:
+            trusted_hosts = ()
 
         async def run_analyzer(
             *args,
@@ -877,9 +887,9 @@ def _scope_network_analyzer_dns(
         analyzer.analyze = run_analyzer
 
 
-async def _run_with_pinned_dns(scan: Awaitable[_T]) -> _T:
+async def _run_with_pinned_dns(make_scan: Callable[[], Awaitable[_T]]) -> _T:
     async with pinned_async_getaddrinfo():
-        return await scan
+        return await make_scan()
 
 
 class MCPScannerWrapper:
@@ -1049,6 +1059,7 @@ class MCPScannerWrapper:
             scanner,
             api_endpoint=aid.endpoint,
             llm_base_url=llm.base_url,
+            llm_uses_local_default=llm.is_local_provider(),
         )
         analyzers = self._parse_analyzers(AnalyzerEnum)
 
@@ -1270,7 +1281,9 @@ class MCPScannerWrapper:
 
         tool_results = asyncio.run(
             _run_with_pinned_dns(
-                scanner.scan_remote_server_tools(target, analyzers=analyzers)
+                lambda: scanner.scan_remote_server_tools(
+                    target, analyzers=analyzers
+                )
             )
         )
         for tr in tool_results:
@@ -1283,7 +1296,9 @@ class MCPScannerWrapper:
         if cfg.scan_prompts:
             prompt_results = asyncio.run(
                 _run_with_pinned_dns(
-                    scanner.scan_remote_server_prompts(target, analyzers=analyzers)
+                    lambda: scanner.scan_remote_server_prompts(
+                        target, analyzers=analyzers
+                    )
                 )
             )
             for pr in prompt_results:
@@ -1296,7 +1311,9 @@ class MCPScannerWrapper:
         if cfg.scan_resources:
             resource_results = asyncio.run(
                 _run_with_pinned_dns(
-                    scanner.scan_remote_server_resources(target, analyzers=analyzers)
+                    lambda: scanner.scan_remote_server_resources(
+                        target, analyzers=analyzers
+                    )
                 )
             )
             for rr in resource_results:
@@ -1310,8 +1327,9 @@ class MCPScannerWrapper:
             try:
                 instr_results = asyncio.run(
                     _run_with_pinned_dns(
-                        scanner.scan_remote_server_instructions(
-                            target, analyzers=analyzers
+                        lambda: scanner.scan_remote_server_instructions(
+                            target,
+                            analyzers=analyzers,
                         )
                     )
                 )
