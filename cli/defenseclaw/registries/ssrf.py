@@ -316,6 +316,7 @@ _MISSING_LOOP_RESOLVER = object()
 @dataclass(frozen=True)
 class _AnalyzerDNSPolicy:
     trusted_hosts: frozenset[str]
+    loopback_only_hosts: frozenset[str]
 
 
 @dataclass
@@ -337,18 +338,31 @@ _ASYNC_RESOLVER_STATE_LOCK = threading.Lock()
 
 
 @contextlib.contextmanager
-def analyzer_dns_resolution(*trusted_hosts: str | bytes) -> Iterator[None]:
+def analyzer_dns_resolution(
+    *trusted_hosts: str | bytes,
+    loopback_only_hosts: tuple[str | bytes, ...] = (),
+) -> Iterator[None]:
     """Allow analyzer DNS without opening a private-network bypass.
 
     Explicitly configured analyzer endpoint hosts are trusted, including
-    private endpoints selected by the operator. Other hosts (for example a
-    provider default or redirect) may resolve only to public addresses. The
-    task-local policy keeps concurrent MCP transport lookups fail closed.
+    private endpoints selected by the operator. Implicit local-provider hosts
+    may be marked loopback-only so poisoned ``localhost`` answers cannot reach
+    another private or metadata address. Other hosts (for example a redirect)
+    may resolve only to public addresses. The task-local policy keeps
+    concurrent MCP transport lookups fail closed.
     """
     current = _ANALYZER_DNS_POLICY.get()
     inherited = current.trusted_hosts if current is not None else frozenset()
     trusted = inherited.union(_canonical_dns_host(host) for host in trusted_hosts)
-    token = _ANALYZER_DNS_POLICY.set(_AnalyzerDNSPolicy(trusted))
+    inherited_loopback = (
+        current.loopback_only_hosts if current is not None else frozenset()
+    )
+    loopback_only = inherited_loopback.union(
+        _canonical_dns_host(host) for host in loopback_only_hosts
+    ).difference(trusted)
+    token = _ANALYZER_DNS_POLICY.set(
+        _AnalyzerDNSPolicy(trusted, loopback_only)
+    )
     try:
         yield
     finally:
@@ -472,6 +486,13 @@ def pinned_getaddrinfo(host: str, port: int, ip: str) -> Iterator[None]:
                             raise SSRFError(
                                 f"analyzer DNS for {asked!r} returned an invalid address"
                             ) from exc
+                        if asked in analyzer_policy.loopback_only_hosts:
+                            if not resolved.is_loopback:
+                                raise SSRFError(
+                                    f"implicit local analyzer host {asked!r} "
+                                    f"resolved to non-loopback address {resolved}"
+                                )
+                            continue
                         if (
                             resolved.is_loopback
                             or resolved.is_link_local

@@ -864,14 +864,16 @@ def _scope_network_analyzer_dns(
             endpoint_host = urlparse(endpoint).hostname if endpoint else None
         except ValueError:
             endpoint_host = None
+        loopback_only_hosts: tuple[str, ...] = ()
         if endpoint_host:
             trusted_hosts = (endpoint_host,)
         elif attr_name == "_llm_analyzer" and llm_uses_local_default:
-            # LiteLLM's built-in local-provider endpoints use loopback when
-            # no explicit base URL is configured. Trust only those literal
-            # default host spellings; redirects and unrelated private names
-            # still pass through analyzer_dns_resolution's public-IP policy.
-            trusted_hosts = ("localhost", "127.0.0.1", "::1")
+            # LiteLLM's built-in local-provider endpoints use these spellings
+            # when no explicit base URL is configured. Require their answers
+            # to remain loopback; redirects and unrelated private names still
+            # pass through analyzer_dns_resolution's public-IP policy.
+            trusted_hosts = ()
+            loopback_only_hosts = ("localhost", "127.0.0.1", "::1")
         else:
             trusted_hosts = ()
 
@@ -879,9 +881,13 @@ def _scope_network_analyzer_dns(
             *args,
             _analyze=analyze,
             _trusted_hosts=trusted_hosts,
+            _loopback_only_hosts=loopback_only_hosts,
             **kwargs,
         ):
-            with analyzer_dns_resolution(*_trusted_hosts):
+            with analyzer_dns_resolution(
+                *_trusted_hosts,
+                loopback_only_hosts=_loopback_only_hosts,
+            ):
                 return await _analyze(*args, **kwargs)
 
         analyzer.analyze = run_analyzer

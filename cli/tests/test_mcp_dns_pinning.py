@@ -72,22 +72,42 @@ def test_pinned_dns_enters_before_scan_coroutine_is_created():
 
 
 @pytest.mark.parametrize(
-    ("provider", "allows_loopback_default"),
+    ("provider", "localhost_address", "allows_loopback_default"),
     [
-        pytest.param("ollama", True, id="local-provider"),
-        pytest.param("anthropic", False, id="cloud-provider"),
+        pytest.param(
+            "ollama",
+            "127.0.0.1",
+            True,
+            id="local-provider-loopback",
+        ),
+        pytest.param(
+            "ollama",
+            "169.254.169.254",
+            False,
+            id="local-provider-poisoned-localhost",
+        ),
+        pytest.param(
+            "anthropic",
+            "127.0.0.1",
+            False,
+            id="cloud-provider-loopback",
+        ),
     ],
 )
 def test_only_local_provider_default_can_resolve_loopback(
     provider,
+    localhost_address,
     allows_loopback_default,
 ):
     calls: list[str] = []
 
-    def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):  # noqa: A002
         node = host.decode("ascii") if isinstance(host, bytes) else str(host)
         calls.append(node)
-        address = "127.0.0.1" if node in {"localhost", "redirect.invalid"} else node
+        address = {
+            "localhost": localhost_address,
+            "redirect.invalid": "127.0.0.1",
+        }.get(node, node)
         return [
             (
                 socket.AF_INET,
