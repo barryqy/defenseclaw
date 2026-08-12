@@ -15,11 +15,11 @@
       "size": 482
     },
     {
-      "git_blob": "a612f73a48d72a7cdc6c4a9740dadb2d36f40361",
+      "git_blob": "7668ab85febe9f7346a74177c0df33114cb09dba",
       "mode": "100644",
       "path": "README.md",
-      "sha256": "6e859219f85fa6d2be685c685cf30c8280d6763595301302bd636432f05b3ba2",
-      "size": 15280
+      "sha256": "b218d10a9ba3d8f641a1143b9dd8efa9585140b1416c83adc8dd31640044ff5e",
+      "size": 17138
     },
     {
       "git_blob": "75775431624b8beb790be6d00595a82ed2f75f0b",
@@ -71,18 +71,18 @@
       "size": 810
     },
     {
-      "git_blob": "61828e7513b12fd6e6a68cbb326f683ea3d7490e",
+      "git_blob": "a772d6029296616ae153ee3e08ff6dd8693811af",
       "mode": "100644",
       "path": "package-lock.json",
-      "sha256": "39e780029312d104695c08b3906dbf53d94bc2aaec1d034f06691da880bb6625",
-      "size": 209957
+      "sha256": "e0ac2e3bada2412f6f0cebdf745125dddd2adc577a2b56ba587f9f5a3c175651",
+      "size": 245948
     },
     {
-      "git_blob": "2d0e4932c33d736e1089d51d97e513e3cd86bf4e",
+      "git_blob": "d5a042169aa2cd880d8549baa49118acf5e42b2c",
       "mode": "100644",
       "path": "package.json",
-      "sha256": "0adc7df82d114cbff1909e1216e04b0fe9978f2610737ce32fc73303d9bf3a7a",
-      "size": 4286
+      "sha256": "75048a1b26c96bb962fc922b35a6d7d3803597e32dbf5f2c629dac13c937fb5e",
+      "size": 4864
     },
     {
       "git_blob": "aadbd688140b2f3c9be24b3e48dd1e02b7306ae5",
@@ -106,11 +106,11 @@
       "size": 29759
     },
     {
-      "git_blob": "8ec42f4a8ef3286c2b29852814e77fef31d5be6f",
+      "git_blob": "b8a2ab9563be21e5ca729a0bdfb5a5cc95d8fe71",
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "61ab434faed8eb05bed345f5cb0e543d15c037a8bc22b2cc207a6c157745dd78",
-      "size": 82891
+      "sha256": "da6c1b34be33f0eea4c58d5dad457d8ce2086f019d80c7c035d21ae3bfc90033",
+      "size": 85687
     },
     {
       "git_blob": "61223080caf26b055375a454c2261be9914462cb",
@@ -127,11 +127,11 @@
       "size": 4676
     },
     {
-      "git_blob": "af2a67c1d227bf6a7461c29576b09ccfd68a81b6",
+      "git_blob": "5a206458fb53f1b59b43084b27bb679b21030e83",
       "mode": "100644",
       "path": "src/console-server.ts",
-      "sha256": "0e84bd3b83de7908fa79e1a55f9d43b3b565f792e6e6cf5a56ce78b7661050e0",
-      "size": 48948
+      "sha256": "dbe8fb83e14fa0521141765f522dcfef9e2daaa5613d84f2031ae636d0014baa",
+      "size": 49753
     },
     {
       "git_blob": "aaa43e2537be94a257d8ea741d895d79e293cf0b",
@@ -162,11 +162,11 @@
       "size": 16122
     },
     {
-      "git_blob": "056b930e5bf2c6981e5f819b939ef03ff51ae6a1",
+      "git_blob": "0fdc4cf1d4ea1ddb8002fba2853142300bc24ec0",
       "mode": "100644",
       "path": "src/install.ts",
-      "sha256": "e3bd5b5d9080c1f072e6d5d2a1f5893cff9544c6bd87f4eaf976ca801b61b574",
-      "size": 101277
+      "sha256": "5287d29a697c153cfdc428a8a616689f54e41ccd6d3a348f128e223d699bae28",
+      "size": 108377
     },
     {
       "git_blob": "dde6a858ac8436d259791c90979735dc8fabe8bb",
@@ -239,11 +239,11 @@
       "size": 5160
     },
     {
-      "git_blob": "ff7541ca1495bfb0946eb3afb27d592687831104",
+      "git_blob": "6a097b5df788b232480012b5f0edbb19ff917404",
       "mode": "100644",
       "path": "src/unlock.ts",
-      "sha256": "d370fdaf6cbd7eea3a97a812f6c2df44cd3acebdb0883b1f93a502bd26532de5",
-      "size": 43613
+      "sha256": "57b3c7690868ee9036bb62a2b08d56321f87a411db6592bd6bfd88e1f0628d99",
+      "size": 43636
     },
     {
       "git_blob": "82acba4b424c74317ca147db74151c006b990c54",
@@ -253,10 +253,10 @@
       "size": 13712
     },
     {
-      "git_blob": "fa9ab620c15f804a635d212251ce282fe95610e0",
+      "git_blob": "7436d30b96041b046dcde5443a36240d9ed55141",
       "mode": "100644",
       "path": "src/version.ts",
-      "sha256": "92744da6264a9f3933c0edbd6d16ed9e54590114627a811014e4a85ec5ffecad",
+      "sha256": "77701ca5cb215b0395a42bcfa3d26ea260349cb625b1af6935dd9c197be29cab",
       "size": 41
     },
     {
@@ -310,7 +310,7 @@
     }
   ],
   "repository": "https://github.com/sgateway/s-gw.git",
-  "revision": "a9ffa790060d81b0e4e22eea21eb153d2cdeca22",
+  "revision": "e4502cf7ef5a6e251c2162089836a521ea7ce7b2",
   "schema_version": 2,
-  "tree": "ecf1639f4c6f4b2e55f3945da8784adb36e7082a"
+  "tree": "e33048d46dde77ea717f4be0ef7a9f351d002f89"
 }

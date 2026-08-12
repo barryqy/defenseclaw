@@ -30,18 +30,17 @@ Current queue:
    kernel-derived canonical PowerShell path used by Windows SSH key
    protection.
 6. `0006-defenseclaw-standalone-parity.patch` rejects the standalone Windows
-   login-start route before store construction, binds the host-selected
-   PowerShell to the kernel-derived canonical executable by file identity, and
-   keeps the DefenseClaw trust tests aligned with the shared Windows path helper.
+   login-start and desktop instance-key routes before store construction, binds
+   the host-selected PowerShell to the kernel-derived canonical executable by
+   file identity, and keeps the DefenseClaw trust tests aligned with the shared
+   Windows path helper.
 7. `0007-defenseclaw-macos-keychain-status.patch` uses the reviewed macOS
    credential helper's metadata-only `status` operation instead of requiring
    the standalone app's separately packaged Keychain inspector. It also locks
    the integrated runtime tests to exact-argv reusable approvals and the direct
    `/usr/bin/security` execution denial from standalone commit `9cbe37e`.
 
-The pinned upstream revision includes the standalone cross-platform parity,
-dependency refresh, credential-source metadata, portable test launcher,
-side-effect-free setup help, Windows helper lifetime work, macOS Keychain
-alert-noise hardening through standalone commit `9cbe37e`, and the Linux Preview
-support documentation correction at `a9ffa79`. The queue contains only
-DefenseClaw host adaptations.
+The pinned upstream revision is public s-gw v0.1.20 release commit `e4502cf`.
+It includes the standalone cross-platform credential and lifecycle parity plus
+native Windows/Linux desktop previews. The queue contains only DefenseClaw host
+adaptations, and the vendored source selection excludes the standalone desktop UI.

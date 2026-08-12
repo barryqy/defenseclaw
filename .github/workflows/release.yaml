@@ -145,6 +145,11 @@ jobs:
           cache: npm
           cache-dependency-path: third_party/s-gw/upstream/package-lock.json
 
+      - name: Pin the reviewed s-gw npm
+        run: |
+          npm install --global --no-audit --no-fund npm@10.9.8
+          test "$(npm --version)" = "10.9.8"
+
       - name: Audit the effective s-gw production dependencies
         run: make sgw-module-audit
 
@@ -386,6 +391,11 @@ jobs:
           node-version: "24.18.1"
           cache: npm
           cache-dependency-path: third_party/s-gw/upstream/package-lock.json
+
+      - name: Pin the reviewed s-gw npm
+        run: |
+          npm install --global --no-audit --no-fund npm@10.9.8
+          test "$(npm --version)" = "10.9.8"
 
       - name: Build stamped CLI, plugin, and upgrade policy
         env:

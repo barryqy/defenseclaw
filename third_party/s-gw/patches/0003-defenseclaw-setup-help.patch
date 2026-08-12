@@ -1,4 +1,4 @@
-From 586cf3aeab6a94426c08762bc865225ab1b1464c Mon Sep 17 00:00:00 2001
+From dc63117cc80cdab2099b4e2af0c223842ff5cf0e Mon Sep 17 00:00:00 2001
 From: sgateway <299698546+sgateway@users.noreply.github.com>
 Date: Tue, 4 Aug 2026 14:50:19 -0700
 Subject: [PATCH 3/7] Keep restricted setup help side-effect free
@@ -134,6 +134,3 @@ index 6deaf1d..bfe3444 100644
    it("rejects approval and authorization mutations before creating store state", async () => {
      const policyAliases = ["add", "update", "edit", "arrange", "organize", "delete", "remove", "enable", "disable"];
      const rejectedRoutes = [
--- 
-2.50.1 (Apple Git-155)
-

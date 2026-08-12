@@ -30,10 +30,9 @@ DefenseClaw-specific changes belong in a visible patch queue under `patches/`
 until the same change is accepted in the standalone s-gw repository. Never
 edit `upstream/` directly.
 
-The upstream mirror pins the cross-platform credential-store, lifecycle
-parity, independent Windows helper lifetime work, and macOS Keychain alert-noise
-hardening through standalone commit `9cbe37e`, plus the Linux Preview support
-documentation correction at `a9ffa79`.
+The upstream mirror pins public s-gw v0.1.20 at release commit `e4502cf`,
+including the cross-platform credential-store and lifecycle parity work. The
+explicit source selection continues to exclude the standalone native desktop UI.
 The current patch queue advances the integrated module to 0.2.0, replaces the
 standalone Linux Secret Service CLI with the packaged helper contract, and
 keeps restricted setup help side-effect
@@ -42,7 +41,7 @@ ciphertext, the approval console, and approval mutations are deliberately
 absent from the TypeScript runtime; the signed native runner owns those
 surfaces. The DefenseClaw native gateway performs platform-specific runner
 admission before opening the console or sending proxy segments. The upstream
-package version remains 0.1.19; the exact unreleased revision is recorded in
+package version is 0.1.20; the exact release revision is recorded in
 `release/s-gw-module.json`.
 
 Production packages require an approved execution runner, OS credential-store
@@ -128,5 +127,5 @@ then adds the metadata file's actual digest to the private receipt. Runtime
 status requires the receipt to match every installed file, including imported
 `dist` chunks, `node_modules`, helpers, runner, UI assets, the signed license
 bundle, and the metadata file.
-The release build pins Node.js 24.18.1 and npm 11.16.0 and removes npm's mutable
+The release build pins Node.js 24.18.1 and npm 10.9.8 and removes npm's mutable
 `node_modules/.package-lock.json` before inventorying runtime files.

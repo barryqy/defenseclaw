@@ -1009,6 +1009,7 @@ def test_registered_mcp_environment_pins_control_environment(monkeypatch):
     hostile.update(
         {
             "PATH": "/tmp/untrusted-bin",
+            "SGW_DESKTOP_APP_PATH": "/tmp/fake-desktop",
             "SGW_HOME": "/tmp/other-store",
             "SGW_HELPER_SETTLE": "1",
             "SGW_LOGIN_SESSION_ID": "foreign-session",

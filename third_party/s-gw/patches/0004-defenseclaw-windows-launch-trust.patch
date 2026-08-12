@@ -1,14 +1,39 @@
-From 9833b646b6fa87a5c4fc601a5908c49393ac5af8 Mon Sep 17 00:00:00 2001
+From 922672734a08f948b91336aa6c0591488d308737 Mon Sep 17 00:00:00 2001
 From: sgateway <299698546+sgateway@users.noreply.github.com>
 Date: Tue, 4 Aug 2026 14:53:42 -0700
 Subject: [PATCH 4/7] Adapt Windows launch trust to current upstream
 
 ---
- tests/defenseclaw-runtime.test.ts | 8 ++++----
- 1 file changed, 4 insertions(+), 4 deletions(-)
+ src/install.ts                    |  6 ++++--
+ tests/defenseclaw-runtime.test.ts | 20 ++++++++++++++++----
+ 2 files changed, 20 insertions(+), 6 deletions(-)
 
+diff --git a/src/install.ts b/src/install.ts
+index e9e50c0..ea3fa1c 100644
+--- a/src/install.ts
++++ b/src/install.ts
+@@ -837,7 +837,8 @@ export function stopWindowsSurfaces(options: WindowsSurfaceScope = {}): WindowsS
+       SGW_STOP_PORT: String(endpoint.port),
+       SGW_STOP_POWERSHELL_PATH: powershell
+     }),
+-    stdio: ["ignore", "pipe", "pipe"]
++    stdio: ["ignore", "pipe", "pipe"],
++    windowsHide: true
+   });
+   if (result.status !== 0) {
+     throw new Error(result.stderr.trim() || "Could not stop the running s-gw Windows surfaces.");
+@@ -1668,7 +1669,8 @@ export async function openWindowsClient(options: MenuBarOptions = {}): Promise<W
+       cwd: path.dirname(powershell),
+       encoding: "utf8",
+       env: windowsEnvironment(url),
+-      stdio: ["ignore", "pipe", "pipe"]
++      stdio: ["ignore", "pipe", "pipe"],
++      windowsHide: true
+     }
+   );
+ 
 diff --git a/tests/defenseclaw-runtime.test.ts b/tests/defenseclaw-runtime.test.ts
-index bfe3444..5dc8301 100644
+index bfe3444..bf24e5e 100644
 --- a/tests/defenseclaw-runtime.test.ts
 +++ b/tests/defenseclaw-runtime.test.ts
 @@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
@@ -20,7 +45,26 @@ index bfe3444..5dc8301 100644
  
  describe("DefenseClaw local console launch", () => {
    it("admits only the host-resolved PowerShell path on Windows", async () => {
-@@ -160,7 +160,7 @@ describe("DefenseClaw local console launch", () => {
+@@ -23,6 +23,18 @@ describe("DefenseClaw local console launch", () => {
+     expect(trusted).toContain("realpathSync(candidate)");
+   });
+ 
++  it("hides every synchronous PowerShell window", async () => {
++    const install = await readFile(new URL("../src/install.ts", import.meta.url), "utf8");
++    const starts = [...install.matchAll(/spawnSync\(\s*powershell,/g)];
++    const calls = [...install.matchAll(/spawnSync\(\s*powershell,[\s\S]*?\n\s*\}\s*\);/g)];
++
++    expect(calls.length).toBeGreaterThan(0);
++    expect(calls.length).toBe(starts.length);
++    for (const call of calls) {
++      expect(call[0]).toContain("windowsHide: true");
++    }
++  });
++
+   it("contains no TypeScript proxy-tokenizer or approval mutation fallback", async () => {
+     const cli = await readFile(new URL("../src/cli.ts", import.meta.url), "utf8");
+     const mcp = await readFile(new URL("../src/mcp-server.ts", import.meta.url), "utf8");
+@@ -160,7 +172,7 @@ describe("DefenseClaw local console launch", () => {
        const recoveryHome = path.join(tmpDir, "recovery");
  
        try {
@@ -29,7 +73,7 @@ index bfe3444..5dc8301 100644
            cwd: repoRoot,
            encoding: "utf8",
            env: {
-@@ -206,7 +206,7 @@ describe("DefenseClaw local console launch", () => {
+@@ -206,7 +218,7 @@ describe("DefenseClaw local console launch", () => {
        const recoveryHome = path.join(tmpDir, "recovery");
  
        try {
@@ -38,7 +82,7 @@ index bfe3444..5dc8301 100644
            cwd: repoRoot,
            encoding: "utf8",
            env: {
-@@ -255,7 +255,7 @@ describe("DefenseClaw local console launch", () => {
+@@ -255,7 +267,7 @@ describe("DefenseClaw local console launch", () => {
        await writeFile(helperPath, helper, { mode: 0o700 });
        await chmod(helperPath, 0o700);
        await writeFile(wrapper, wrapperSource);
@@ -47,6 +91,3 @@ index bfe3444..5dc8301 100644
          cwd: repoRoot,
          encoding: "utf8",
          env: {
--- 
-2.50.1 (Apple Git-155)
-

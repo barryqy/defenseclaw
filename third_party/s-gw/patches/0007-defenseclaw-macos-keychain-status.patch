@@ -1,4 +1,4 @@
-From 90214df02b2fd0e01a8423fbc450e9622232f8ca Mon Sep 17 00:00:00 2001
+From 573038d50c84e6526c35a2cacce17c1d8c599ec4 Mon Sep 17 00:00:00 2001
 From: barry <bayuan@cisco.com>
 Date: Fri, 7 Aug 2026 14:57:50 -0700
 Subject: [PATCH 7/7] Use signed helper for macOS credential status
@@ -9,7 +9,7 @@ Subject: [PATCH 7/7] Use signed helper for macOS credential status
  2 files changed, 88 insertions(+), 20 deletions(-)
 
 diff --git a/src/unlock.ts b/src/unlock.ts
-index 800ca75..d100c8c 100644
+index fbf871b..57fc217 100644
 --- a/src/unlock.ts
 +++ b/src/unlock.ts
 @@ -1002,28 +1002,19 @@ function runKeychainGet(info: KeychainInfo): string {
@@ -53,7 +53,7 @@ index 800ca75..d100c8c 100644
  
    if (info.provider === "windows-helper" && info.helperPath) {
 diff --git a/tests/defenseclaw-runtime.test.ts b/tests/defenseclaw-runtime.test.ts
-index 31d47c1..f245f49 100644
+index b18343e..ed8a319 100644
 --- a/tests/defenseclaw-runtime.test.ts
 +++ b/tests/defenseclaw-runtime.test.ts
 @@ -5,11 +5,88 @@ import path from "node:path";
@@ -145,6 +145,3 @@ index 31d47c1..f245f49 100644
    it("admits only trusted PowerShell paths on Windows", async () => {
      const sources = await Promise.all([
        "install.ts",
--- 
-2.50.1 (Apple Git-155)
-

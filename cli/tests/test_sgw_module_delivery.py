@@ -1040,15 +1040,25 @@ def test_release_checks_use_locked_cryptography_environment() -> None:
     assert "python3 scripts/build_sgw_module.py" not in workflow
 
 
-def test_release_pins_sgw_node_toolchain_immediately_before_build() -> None:
+def test_release_pins_sgw_toolchain_before_audit_and_build() -> None:
     workflow = (ROOT / ".github" / "workflows" / "release.yaml").read_text(encoding="utf-8")
+    audit_pin = workflow.index("- name: Pin the reviewed s-gw audit toolchain")
+    audit = workflow.index("- name: Audit the effective s-gw production dependencies", audit_pin)
     pin = workflow.index("- name: Pin the reviewed s-gw build toolchain")
     build = workflow.index("- name: Build stamped CLI, plugin, and upgrade policy", pin)
+    audit_steps = workflow[audit_pin:audit]
     pinned_step = workflow[pin:build]
 
+    assert 'node-version: "24.18.1"' in audit_steps
     assert 'node-version: "24.18.1"' in pinned_step
+    assert "npm install --global --no-audit --no-fund npm@10.9.8" in audit_steps
+    assert "npm install --global --no-audit --no-fund npm@10.9.8" in pinned_step
+    assert 'test "$(npm --version)" = "10.9.8"' in audit_steps
+    assert 'test "$(npm --version)" = "10.9.8"' in pinned_step
+    assert "third_party/s-gw/upstream/package-lock.json" in audit_steps
     assert "third_party/s-gw/upstream/package-lock.json" in pinned_step
-    assert workflow[pin:build].count("- name:") == 1
+    assert audit_steps.count("- name:") == 2
+    assert pinned_step.count("- name:") == 2
 
 
 def test_partial_artifact_set_does_not_touch_destination(tmp_path: Path) -> None:

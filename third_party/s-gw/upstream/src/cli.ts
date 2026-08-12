@@ -34,9 +34,9 @@ import {
   installWindowsLoginService,
   launchAgentStatus,
   normalizeMenuBarCountMode,
+  openDesktopApp,
   openMacApp,
   openMenuBarHelper,
-  openWindowsClient,
   openWindowsHelper,
   packageHealth,
   refreshMacRuntimeServices,
@@ -49,6 +49,7 @@ import {
   stopInstalledWindowsLoginService,
   stopMacApp,
   stopWindowsSurfaces,
+  waitForConsoleAuthority,
   type WindowsStoppedSurfaces,
   uninstallConsoleLaunchAgent,
   uninstallMenuBarLaunchAgent,
@@ -59,6 +60,7 @@ import {
 } from "./install.js";
 import { listOnePasswordSecretReferences, onePasswordStatus, readOnePasswordReference } from "./onepassword.js";
 import { installPackageUpdate, planPackageUpdate } from "./package-update.js";
+import { getSgwInstanceKey } from "./paths.js";
 import { SGW_SSH_SESSION_COMMAND, closeOwnedSshSession, defaultSshInjectEnv } from "./ssh.js";
 import { normalizeCommandGrant, SecretStore } from "./store.js";
 import {
@@ -116,6 +118,11 @@ async function main(): Promise<void> {
     const payload = getFlag(parsed.flags, "payload");
     if (!payload) throw new Error("Windows login startup requires its managed payload.");
     await startInstalledWindowsLoginService(payload);
+    return;
+  }
+
+  if (first === "__desktop-instance-key") {
+    printJson({ instanceKey: getSgwInstanceKey() });
     return;
   }
 
@@ -191,7 +198,7 @@ async function main(): Promise<void> {
     }
 
     if (!hasFlag(parsed.flags, "no-open")) {
-      openBrowser(running.url);
+      await openBrowser(running.url);
     }
 
     process.stdout.write(`s-gw console running at ${running.url}\n`);
@@ -2237,7 +2244,8 @@ async function handleAppCommand(
 ): Promise<void> {
   if (action === "app-path") {
     const layout = getPackageLayout();
-    process.stdout.write(`${process.platform === "win32" ? layout.windowsClientLauncherPath : layout.macAppPath}\n`);
+    const appPath = process.platform === "darwin" ? layout.macAppPath : layout.desktopAppPath;
+    process.stdout.write(`${appPath}\n`);
     return;
   }
 
@@ -2274,26 +2282,53 @@ async function handleAppCommand(
   }
 
   if (action === "open") {
-    if (process.platform === "win32") {
-      printJson(
-        await openWindowsClient({
-          consoleUrl: getFlag(flags, "console-url"),
-          port: numericFlag(flags, "port", 8718)
-        })
-      );
+    const { port, url: consoleUrl } = appConsoleEndpoint(flags);
+    if (hasFlag(flags, "browser")) {
+      const service = await ensureBrowserConsole(port);
+      await waitForConsoleAuthority(consoleUrl);
+      await openBrowser(consoleUrl);
+      printJson({ kind: "web-console", consoleUrl, service });
       return;
     }
 
-    printJson(
-      openMacApp({
-        consoleUrl: getFlag(flags, "console-url"),
-        port: numericFlag(flags, "port", 8718)
-      })
-    );
+    printJson(await openPreferredUi(port, consoleUrl));
     return;
   }
 
   throw new Error("app requires app-path, install, open, refresh-services, or refresh-agents.");
+}
+
+function appConsoleEndpoint(flags: Record<string, string | boolean | string[]>): { port: number; url: string } {
+  const configuredUrl = getFlag(flags, "console-url");
+  const configuredPort = hasFlag(flags, "port") ? numericFlag(flags, "port", 8718) : undefined;
+  if (!configuredUrl) {
+    const port = configuredPort ?? 8718;
+    return { port, url: `http://127.0.0.1:${port}/` };
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(configuredUrl);
+  } catch {
+    throw new Error("--console-url must use http://127.0.0.1:<port>/.");
+  }
+  const port = Number(parsed.port);
+  if (parsed.protocol !== "http:"
+    || parsed.hostname !== "127.0.0.1"
+    || parsed.username
+    || parsed.password
+    || parsed.pathname !== "/"
+    || parsed.search
+    || parsed.hash
+    || !Number.isInteger(port)
+    || port < 1
+    || port > 65_535) {
+    throw new Error("--console-url must use http://127.0.0.1:<port>/.");
+  }
+  if (configuredPort !== undefined && configuredPort !== port) {
+    throw new Error("--port must match the explicit port in --console-url.");
+  }
+  return { port, url: parsed.toString() };
 }
 
 async function handleGuardCommand(
@@ -2348,18 +2383,38 @@ async function handleGuardRun(
 }
 
 async function openPreferredUi(port: number, consoleUrl: string) {
-  if (process.platform === "win32") {
-    const opened = await openWindowsClient({ port, consoleUrl });
-    return { kind: "windows-client", ...opened };
+  if (process.platform === "win32" || process.platform === "linux") {
+    try {
+      const opened = await openDesktopApp({ port, consoleUrl });
+      return { kind: "desktop-app", ...opened };
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${detail} To use the browser backup, run \`s-gw app open --browser\`.`);
+    }
   }
 
   try {
     const opened = openMacApp({ port, consoleUrl });
     return { kind: "mac-app", ...opened };
   } catch {
-    openBrowser(consoleUrl);
-    return { kind: "web-console", consoleUrl };
+    const service = await ensureBrowserConsole(port);
+    await waitForConsoleAuthority(consoleUrl);
+    await openBrowser(consoleUrl);
+    return { kind: "web-console", consoleUrl, service };
   }
+}
+
+async function ensureBrowserConsole(port: number): Promise<unknown> {
+  if (process.platform === "win32") {
+    return installWindowsLoginService({ port, start: true, tray: true });
+  }
+  if (process.platform === "linux") {
+    return installSystemdUserService({ port, start: true });
+  }
+
+  return launchAgentStatus("console").installed
+    ? startInstalledLaunchAgent("console")
+    : installConsoleLaunchAgent({ port, start: true });
 }
 
 function shouldOpenUi(flags: Record<string, string | boolean | string[]>): boolean {
@@ -2368,7 +2423,7 @@ function shouldOpenUi(flags: Record<string, string | boolean | string[]>): boole
   return true;
 }
 
-function openBrowser(url: string): void {
+async function openBrowser(url: string): Promise<void> {
   const command = process.platform === "darwin"
     ? "/usr/bin/open"
     : process.platform === "win32"
@@ -2383,7 +2438,28 @@ function openBrowser(url: string): void {
     stdio: "ignore",
     shell: false
   });
-  child.on("error", () => undefined);
+  await new Promise<void>((resolve, reject) => {
+    let spawned = false;
+    const timer = setTimeout(() => {
+      if (!spawned) {
+        reject(new Error(`Timed out opening the browser for ${url}`));
+        return;
+      }
+      resolve();
+    }, 3_000);
+    child.once("spawn", () => {
+      spawned = true;
+    });
+    child.once("exit", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(`Browser launcher exited with status ${code ?? "unknown"} for ${url}`));
+    });
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(new Error(`Could not open the browser for ${url}: ${error.message}`));
+    });
+  });
   child.unref();
 }
 
@@ -2427,7 +2503,7 @@ Commands:
   s-gw console [--host 127.0.0.1] [--port 8718] [--no-open]
   s-gw app app-path
   s-gw app install
-  s-gw app open [--port 8718] [--console-url URL]
+  s-gw app open [--port 8718] [--console-url URL] [--browser]
   s-gw app refresh-services [--no-agents]
   s-gw app refresh-agents [--lock-timeout-ms 35000]
   s-gw guard status
