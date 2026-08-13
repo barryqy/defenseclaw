@@ -1,4 +1,4 @@
-From 573038d50c84e6526c35a2cacce17c1d8c599ec4 Mon Sep 17 00:00:00 2001
+From 3b52b661634ba03b4dbc8223ba23c58820039367 Mon Sep 17 00:00:00 2001
 From: barry <bayuan@cisco.com>
 Date: Fri, 7 Aug 2026 14:57:50 -0700
 Subject: [PATCH 7/7] Use signed helper for macOS credential status
@@ -9,7 +9,7 @@ Subject: [PATCH 7/7] Use signed helper for macOS credential status
  2 files changed, 88 insertions(+), 20 deletions(-)
 
 diff --git a/src/unlock.ts b/src/unlock.ts
-index fbf871b..57fc217 100644
+index fbf871b92ced3287c81c3235fe813fdd003ab2dd..57fc217b821e6b84a159b7aec270d7d07c904bbd 100644
 --- a/src/unlock.ts
 +++ b/src/unlock.ts
 @@ -1002,28 +1002,19 @@ function runKeychainGet(info: KeychainInfo): string {
@@ -53,7 +53,7 @@ index fbf871b..57fc217 100644
  
    if (info.provider === "windows-helper" && info.helperPath) {
 diff --git a/tests/defenseclaw-runtime.test.ts b/tests/defenseclaw-runtime.test.ts
-index b18343e..ed8a319 100644
+index c95715b46c5995a44d1dccffac04acc6de3a4bae..bbcb8430b412017f3d2cfe00feb5dd57393b6f9e 100644
 --- a/tests/defenseclaw-runtime.test.ts
 +++ b/tests/defenseclaw-runtime.test.ts
 @@ -5,11 +5,88 @@ import path from "node:path";

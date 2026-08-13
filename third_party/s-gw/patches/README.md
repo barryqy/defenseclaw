@@ -15,10 +15,10 @@ Current queue:
    mutation. The DefenseClaw native gateway admits and launches the signed
    runner for raw proxy tokenization and user-presence approval.
 2. `0002-defenseclaw-native-authorization-hardening.patch` rejects every CLI
-   `--allow-command` enrollment path before store construction and removes
-   native app, service, menu bar, and browser work from restricted setup.
-   Command authorization and approval UI remain owned by the admitted native
-   runner.
+   approval mutation, including `approve-policy`, and every `--allow-command`
+   enrollment path before store construction. It also removes native app,
+   service, menu bar, and browser work from restricted setup. Command
+   authorization and approval UI remain owned by the admitted native runner.
 3. `0003-defenseclaw-setup-help.patch` makes `s-gw setup --help` and
    `s-gw setup -h` print the restricted DefenseClaw setup contract before any
    credential-store, service, or UI work.
@@ -40,7 +40,8 @@ Current queue:
    the integrated runtime tests to exact-argv reusable approvals and the direct
    `/usr/bin/security` execution denial from standalone commit `9cbe37e`.
 
-The pinned upstream revision is public s-gw v0.1.20 release commit `e4502cf`.
-It includes the standalone cross-platform credential and lifecycle parity plus
-native Windows/Linux desktop previews. The queue contains only DefenseClaw host
-adaptations, and the vendored source selection excludes the standalone desktop UI.
+The pinned upstream revision is public s-gw v0.1.21 release commit `a2f4060`.
+It includes the standalone cross-platform credential and lifecycle parity,
+approval policy scope hardening, and native Windows/Linux desktop previews. The
+queue contains only DefenseClaw host adaptations, and the vendored source
+selection excludes the standalone desktop UI.

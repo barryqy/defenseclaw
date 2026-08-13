@@ -30,9 +30,10 @@ DefenseClaw-specific changes belong in a visible patch queue under `patches/`
 until the same change is accepted in the standalone s-gw repository. Never
 edit `upstream/` directly.
 
-The upstream mirror pins public s-gw v0.1.20 at release commit `e4502cf`,
-including the cross-platform credential-store and lifecycle parity work. The
-explicit source selection continues to exclude the standalone native desktop UI.
+The upstream mirror pins public s-gw v0.1.21 at release commit `a2f4060`,
+including the cross-platform credential-store, lifecycle parity, and approval
+policy scope hardening. The explicit source selection continues to exclude the
+standalone native desktop UI.
 The current patch queue advances the integrated module to 0.2.0, replaces the
 standalone Linux Secret Service CLI with the packaged helper contract, and
 keeps restricted setup help side-effect
@@ -41,7 +42,7 @@ ciphertext, the approval console, and approval mutations are deliberately
 absent from the TypeScript runtime; the signed native runner owns those
 surfaces. The DefenseClaw native gateway performs platform-specific runner
 admission before opening the console or sending proxy segments. The upstream
-package version is 0.1.20; the exact release revision is recorded in
+package version is 0.1.21; the exact release revision is recorded in
 `release/s-gw-module.json`.
 
 Production packages require an approved execution runner, OS credential-store

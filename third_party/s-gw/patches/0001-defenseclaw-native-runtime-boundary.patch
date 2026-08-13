@@ -1,4 +1,4 @@
-From 4e8f4afbe9e25b3ae04a6891a4f1ed60f1de4f59 Mon Sep 17 00:00:00 2001
+From 4cf451328e107c66e1472d2eccfd49790f1dce71 Mon Sep 17 00:00:00 2001
 From: sgateway <299698546+sgateway@users.noreply.github.com>
 Date: Tue, 4 Aug 2026 14:49:01 -0700
 Subject: [PATCH 1/7] Apply DefenseClaw native runtime boundary
@@ -6,7 +6,7 @@ Subject: [PATCH 1/7] Apply DefenseClaw native runtime boundary
 ---
  package-lock.json                 | 1064 +----------------------------
  package.json                      |    6 +-
- src/cli.ts                        |  278 ++------
+ src/cli.ts                        |  279 ++------
  src/install.ts                    |   15 +-
  src/mcp-server.ts                 |    6 +-
  src/trusted-windows-command.ts    |   22 +
@@ -16,26 +16,26 @@ Subject: [PATCH 1/7] Apply DefenseClaw native runtime boundary
  tests/defenseclaw-runtime.test.ts |  162 +++++
  tests/mcp-e2e.test.ts             |   24 +-
  tsconfig.json                     |    1 +
- 12 files changed, 466 insertions(+), 1394 deletions(-)
+ 12 files changed, 466 insertions(+), 1395 deletions(-)
  create mode 100644 src/trusted-windows-command.ts
  create mode 100644 src/windows-private-acl.ts
  create mode 100644 tests/defenseclaw-runtime.test.ts
 
 diff --git a/package-lock.json b/package-lock.json
-index a772d60..6ba9b6c 100644
+index bf71df7d087424e25e5b3a1ff57f8dff7d324e2e..6ba9b6c05fb1a1f4205bf78847985a81b2069664 100644
 --- a/package-lock.json
 +++ b/package-lock.json
 @@ -1,12 +1,12 @@
  {
    "name": "@s-gw/s-gw",
--  "version": "0.1.20",
+-  "version": "0.1.21",
 +  "version": "0.2.0",
    "lockfileVersion": 3,
    "requires": true,
    "packages": {
      "": {
        "name": "@s-gw/s-gw",
--      "version": "0.1.20",
+-      "version": "0.1.21",
 +      "version": "0.2.0",
        "license": "Apache-2.0",
        "dependencies": {
@@ -1436,13 +1436,13 @@ index a772d60..6ba9b6c 100644
        "version": "4.4.3",
        "resolved": "https://registry.npmjs.org/zod/-/zod-4.4.3.tgz",
 diff --git a/package.json b/package.json
-index d5a0421..46fda82 100644
+index b9d9507c910a987ecd6ed5a26e3bf32fdeffb524..46fda825e63983900377328b321666c4c3ef5777 100644
 --- a/package.json
 +++ b/package.json
 @@ -1,6 +1,6 @@
  {
    "name": "@s-gw/s-gw",
--  "version": "0.1.20",
+-  "version": "0.1.21",
 +  "version": "0.2.0",
    "mcpName": "io.github.sgateway/s-gw",
    "description": "Local credential control for AI coding agents.",
@@ -1476,7 +1476,7 @@ index d5a0421..46fda82 100644
      "@types/d3-sankey": "^0.12.5",
      "@types/node": "^24.0.0",
 diff --git a/src/cli.ts b/src/cli.ts
-index b8a2ab9..bc76f68 100644
+index dbaf1c9f53aec10e7b8d9b4335dcfc4fc321719f..3e6279974e5313d40ae3653849e852d153513bef 100644
 --- a/src/cli.ts
 +++ b/src/cli.ts
 @@ -1,5 +1,4 @@
@@ -1632,7 +1632,7 @@ index b8a2ab9..bc76f68 100644
    }
  
    if (first === "guard") {
-@@ -1203,7 +1152,7 @@ async function handleSetupCommand(
+@@ -1212,7 +1161,7 @@ async function handleSetupCommand(
      appInstall,
      agents,
      nextSteps: [
@@ -1641,7 +1641,7 @@ index b8a2ab9..bc76f68 100644
        "Run `s-gw agent status` to review detected agent connections or resolve any reported conflicts.",
        "Enroll secrets locally with `s-gw secret add-keychain --value-stdin` or scan files with `s-gw scan-file PATH`."
      ]
-@@ -1688,7 +1637,7 @@ async function handleOneShotEnvCommand(
+@@ -1697,7 +1646,7 @@ async function handleOneShotEnvCommand(
    if (admission.kind === "request") {
      printJson({
        approvalRequired: admission.request.state !== "approved",
@@ -1650,7 +1650,7 @@ index b8a2ab9..bc76f68 100644
        localRunCommand: `s-gw execute ${admission.request.id}`,
        request: admission.request
      });
-@@ -1747,7 +1696,7 @@ async function handleSshCommand(
+@@ -1756,7 +1705,7 @@ async function handleSshCommand(
      if (action === "request" || request.state !== "approved") {
        printJson({
          approvalRequired: request.state !== "approved",
@@ -1659,7 +1659,7 @@ index b8a2ab9..bc76f68 100644
          localRunCommand: `s-gw ssh run --request-id ${request.id}`,
          request
        });
-@@ -1964,9 +1913,7 @@ function awsRequestResponse(
+@@ -1973,9 +1922,7 @@ function awsRequestResponse(
  ) {
    return {
      approvalRequired: request.state !== "approved",
@@ -1670,7 +1670,7 @@ index b8a2ab9..bc76f68 100644
      localRunCommand: `s-gw execute ${request.id}`,
      repeatCommand: awsCommandLine("run", awsArgs, { wrapper, handles }),
      wrapper,
-@@ -2244,8 +2191,7 @@ async function handleAppCommand(
+@@ -2279,8 +2226,7 @@ async function handleAppCommand(
  ): Promise<void> {
    if (action === "app-path") {
      const layout = getPackageLayout();
@@ -1680,7 +1680,7 @@ index b8a2ab9..bc76f68 100644
      return;
    }
  
-@@ -2281,56 +2227,11 @@ async function handleAppCommand(
+@@ -2316,56 +2262,11 @@ async function handleAppCommand(
      return;
    }
  
@@ -1738,7 +1738,7 @@ index b8a2ab9..bc76f68 100644
  async function handleGuardCommand(
    store: SecretStore,
    action: string | undefined,
-@@ -2382,96 +2283,69 @@ async function handleGuardRun(
+@@ -2417,96 +2318,69 @@ async function handleGuardRun(
    process.exitCode = code;
  }
  
@@ -1887,7 +1887,7 @@ index b8a2ab9..bc76f68 100644
  }
  
  function printJson(value: unknown): void {
-@@ -2503,7 +2377,7 @@ Commands:
+@@ -2538,7 +2412,7 @@ Commands:
    s-gw console [--host 127.0.0.1] [--port 8718] [--no-open]
    s-gw app app-path
    s-gw app install
@@ -1896,7 +1896,7 @@ index b8a2ab9..bc76f68 100644
    s-gw app refresh-services [--no-agents]
    s-gw app refresh-agents [--lock-timeout-ms 35000]
    s-gw guard status
-@@ -2518,16 +2392,11 @@ Commands:
+@@ -2553,16 +2427,11 @@ Commands:
    s-gw menubar start|stop|status|uninstall
    s-gw helper open
    s-gw unlock status
@@ -1913,15 +1913,15 @@ index b8a2ab9..bc76f68 100644
    s-gw onepassword status
    s-gw onepassword import [--vault Dev] [--dry-run] [--include-companions] [--allow-command CMD]
    s-gw onepassword capture --text-stdin [--vault Dev] [--name NAME] [--inject-env ENV] [--allow-command CMD]
-@@ -2537,16 +2406,8 @@ Commands:
+@@ -2572,16 +2441,8 @@ Commands:
    s-gw ssh run --request-id REQUEST_ID
    s-gw ssh close HANDLE --target user@host [--port 22]
    s-gw approval settings
 -  s-gw approval set --mode per-transaction|timed-session|login-session|always [--duration 15m]
    s-gw approval grants
    s-gw approval policy list
--  s-gw approval policy add --name NAME --decision allow|ask|deny [--handle HANDLE] [--binding ENV=HANDLE] [--agent Codex] [--command NAME] [--resolved-command /path/to/tool] [--action-kind env_command|ssh_session] [--duration 8h]
--  s-gw approval policy update --id POLICY_ID [--name NAME] [--decision allow|ask|deny] [--handle HANDLE] [--agent Codex] [--command NAME] [--resolved-command /path/to/tool] [--clear-expiry]
+-  s-gw approval policy add --name NAME --decision allow|ask|deny [--handle HANDLE] [--binding ENV=HANDLE] [--agent Codex] [--command NAME] [--resolved-command /path/to/tool] [--any-command] [--action-kind env_command|ssh_session] [--duration 8h]
+-  s-gw approval policy update --id POLICY_ID [--name NAME] [--decision allow|ask|deny] [--handle HANDLE] [--agent Codex] [--command NAME] [--resolved-command /path/to/tool] [--any-command] [--clear-expiry]
 -  s-gw approval policy arrange
 -  s-gw approval policy delete --id POLICY_ID
 -  s-gw approval policy enable|disable --id POLICY_ID
@@ -1930,11 +1930,12 @@ index b8a2ab9..bc76f68 100644
    s-gw scan-file PATH [--preview] [--backend keychain|local]
    s-gw agent list
    s-gw agent status [AGENT]
-@@ -2561,9 +2422,10 @@ Commands:
+@@ -2596,10 +2457,10 @@ Commands:
    s-gw requests cleanup [--pending-ttl-ms 86400000] [--approved-ttl-ms 3600000] [--no-dedupe]
    s-gw execute-next [--handle HANDLE] [--kind env_command|ssh_session] [--command CMD]
    s-gw store backups
 -  s-gw approve REQUEST_ID [--mode per-transaction|timed-session|login-session|always] [--duration 8h] [--agent-scope same-agent|any-agent]
+-  s-gw approve-policy REQUEST_ID
 -  s-gw deny REQUEST_ID
    s-gw execute REQUEST_ID
 +
@@ -1944,7 +1945,7 @@ index b8a2ab9..bc76f68 100644
  }
  
 diff --git a/src/install.ts b/src/install.ts
-index 0fdc4cf..e9e50c0 100644
+index 0fdc4cf1d4ea1ddb8002fba2853142300bc24ec0..e9e50c06ad942bf0be143a98122c5e5f8dff369d 100644
 --- a/src/install.ts
 +++ b/src/install.ts
 @@ -28,6 +28,7 @@ import {
@@ -2019,7 +2020,7 @@ index 0fdc4cf..e9e50c0 100644
      cwd: path.dirname(powershell),
      encoding: "utf8",
 diff --git a/src/mcp-server.ts b/src/mcp-server.ts
-index dde6a85..babe8dd 100644
+index dde6a858ac8436d259791c90979735dc8fabe8bb..babe8dd9f401abc6754230413fe0bf2c76ae28d4 100644
 --- a/src/mcp-server.ts
 +++ b/src/mcp-server.ts
 @@ -96,7 +96,7 @@ server.registerTool(
@@ -2051,7 +2052,7 @@ index dde6a85..babe8dd 100644
    }
 diff --git a/src/trusted-windows-command.ts b/src/trusted-windows-command.ts
 new file mode 100644
-index 0000000..44b2872
+index 0000000000000000000000000000000000000000..44b2872f280558ce70dc6fba9da7269b3a8b7721
 --- /dev/null
 +++ b/src/trusted-windows-command.ts
 @@ -0,0 +1,22 @@
@@ -2078,7 +2079,7 @@ index 0000000..44b2872
 +  return systemPowershell;
 +}
 diff --git a/src/unlock.ts b/src/unlock.ts
-index 6a097b5..03a8726 100644
+index 6a097b5df788b232480012b5f0edbb19ff917404..03a872646b845791571a3ed3a5046484f6416278 100644
 --- a/src/unlock.ts
 +++ b/src/unlock.ts
 @@ -20,24 +20,24 @@ import path from "node:path";
@@ -2366,15 +2367,15 @@ index 6a097b5..03a8726 100644
    const result = spawnSync(powershell, [
      "-NoLogo",
 diff --git a/src/version.ts b/src/version.ts
-index 7436d30..92da0f7 100644
+index acc940387f935d11b0b9b244f8560f0f56c4e7ee..92da0f787ca3414d03c63d8a1552b7c3214bf51c 100644
 --- a/src/version.ts
 +++ b/src/version.ts
 @@ -1 +1 @@
--export const CURRENT_VERSION = "0.1.20";
+-export const CURRENT_VERSION = "0.1.21";
 +export const CURRENT_VERSION = "0.2.0";
 diff --git a/src/windows-private-acl.ts b/src/windows-private-acl.ts
 new file mode 100644
-index 0000000..5806b71
+index 0000000000000000000000000000000000000000..5806b71d7a2654f4ae2dc2f3fea776d3b797785d
 --- /dev/null
 +++ b/src/windows-private-acl.ts
 @@ -0,0 +1,121 @@
@@ -2501,7 +2502,7 @@ index 0000000..5806b71
 +}
 diff --git a/tests/defenseclaw-runtime.test.ts b/tests/defenseclaw-runtime.test.ts
 new file mode 100644
-index 0000000..336d567
+index 0000000000000000000000000000000000000000..336d56782072f300832dce948b6b0fd446f06ab4
 --- /dev/null
 +++ b/tests/defenseclaw-runtime.test.ts
 @@ -0,0 +1,162 @@
@@ -2668,7 +2669,7 @@ index 0000000..336d567
 +  }, 15_000);
 +});
 diff --git a/tests/mcp-e2e.test.ts b/tests/mcp-e2e.test.ts
-index 656f52e..2d80a18 100644
+index 656f52e01ef0cc23da44f51700fb3b99f05a8c50..2d80a182878f6e490ce4ed34dcc443558d0e1106 100644
 --- a/tests/mcp-e2e.test.ts
 +++ b/tests/mcp-e2e.test.ts
 @@ -5,6 +5,7 @@ import path from "node:path";
@@ -2721,7 +2722,7 @@ index 656f52e..2d80a18 100644
 +  }
 +}
 diff --git a/tsconfig.json b/tsconfig.json
-index df5ecc4..89ea7d1 100644
+index df5ecc4d1aaaf7b71175f569b3a2b364e9d25575..89ea7d1c8d33b6fe12c47c1101928f58ac8a36a5 100644
 --- a/tsconfig.json
 +++ b/tsconfig.json
 @@ -18,6 +18,7 @@

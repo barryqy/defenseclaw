@@ -1,16 +1,17 @@
-From 8f1f1c15fab3f48753f402ed29386246a0a9cf45 Mon Sep 17 00:00:00 2001
+From 480138eeb583a0a070665a8ac29e9cc7ea2f82ff Mon Sep 17 00:00:00 2001
 From: sgateway <299698546+sgateway@users.noreply.github.com>
 Date: Tue, 4 Aug 2026 14:49:39 -0700
 Subject: [PATCH 2/7] Harden DefenseClaw native authorization boundary
 
 ---
- src/cli.ts                        | 89 ++++++-------------------------
- tests/defenseclaw-runtime.test.ts | 71 +++++++++++++++++++++++-
- tests/mcp-e2e.test.ts             | 25 +++++++--
- 3 files changed, 109 insertions(+), 76 deletions(-)
+ src/cli.ts                        | 91 ++++++-------------------------
+ src/command-suggest.ts            |  1 -
+ tests/defenseclaw-runtime.test.ts | 73 ++++++++++++++++++++++++-
+ tests/mcp-e2e.test.ts             | 25 ++++++++-
+ 4 files changed, 112 insertions(+), 78 deletions(-)
 
 diff --git a/src/cli.ts b/src/cli.ts
-index bc76f68..08f6f72 100644
+index 3e6279974e5313d40ae3653849e852d153513bef..8b5b01ecdf58c3c7ebe50bbac553c2016e01c9ad 100644
 --- a/src/cli.ts
 +++ b/src/cli.ts
 @@ -100,12 +100,13 @@ async function main(): Promise<void> {
@@ -28,7 +29,7 @@ index bc76f68..08f6f72 100644
    const store = new SecretStore();
  
    if (first === "init") {
-@@ -1029,16 +1030,6 @@ async function handleSetupCommand(
+@@ -1038,16 +1039,6 @@ async function handleSetupCommand(
    store: SecretStore,
    flags: Record<string, string | boolean | string[]>
  ): Promise<void> {
@@ -45,7 +46,7 @@ index bc76f68..08f6f72 100644
    const keychainHelper = process.platform === "darwin" ? installPersistentKeychainHelper() : undefined;
    const keychainCompatibility = process.platform === "darwin" ? pinPackagedKeychainHelper() : undefined;
    const beforeUnlock = unlockStatus();
-@@ -1089,68 +1080,17 @@ async function handleSetupCommand(
+@@ -1098,68 +1089,17 @@ async function handleSetupCommand(
    const secretKeychainRepair = process.platform === "darwin"
      ? await store.repairKeychainAccess()
      : undefined;
@@ -115,7 +116,7 @@ index bc76f68..08f6f72 100644
      nextSteps: [
        "Open the approval console with `defenseclaw credential-protection open`.",
        "Run `s-gw agent status` to review detected agent connections or resolve any reported conflicts.",
-@@ -2310,8 +2250,13 @@ const approvalPolicyMutations = new Set([
+@@ -2345,9 +2285,14 @@ const approvalPolicyMutations = new Set([
  function rejectDefenseClawAuthorizationMutation(
    first: string,
    second: string | undefined,
@@ -123,14 +124,16 @@ index bc76f68..08f6f72 100644
 +  third: string | undefined,
 +  flags: Record<string, string | boolean | string[]>
  ): void {
+-  if (first === "approve" || first === "deny") {
 +  if (Object.prototype.hasOwnProperty.call(flags, "allow-command")) {
 +    throw nativeAuthorizationGuidance();
 +  }
 +
-   if (first === "approve" || first === "deny") {
++  if (first === "approve" || first === "approve-policy" || first === "deny") {
      throw nativeAuthorizationGuidance();
    }
-@@ -2365,7 +2310,7 @@ function printHelp(): void {
+ 
+@@ -2400,7 +2345,7 @@ function printHelp(): void {
  
  Commands:
    s-gw init
@@ -139,7 +142,7 @@ index bc76f68..08f6f72 100644
    s-gw status
    s-gw start [--port 8718] [--no-open-app] [--no-service] [--no-menubar]
    s-gw stop
-@@ -2381,8 +2326,8 @@ Commands:
+@@ -2416,8 +2361,8 @@ Commands:
    s-gw app refresh-services [--no-agents]
    s-gw app refresh-agents [--lock-timeout-ms 35000]
    s-gw guard status
@@ -150,7 +153,7 @@ index bc76f68..08f6f72 100644
    s-gw run env-command HANDLE --command CMD --inject-env ENV [--with-env ENV=HANDLE] [--arg VALUE] [--raw]
    s-gw service install [--port 8718] [--start] [--menubar]
    s-gw service start|stop|status|uninstall
-@@ -2392,14 +2337,14 @@ Commands:
+@@ -2427,14 +2372,14 @@ Commands:
    s-gw menubar start|stop|status|uninstall
    s-gw helper open
    s-gw unlock status
@@ -170,11 +173,23 @@ index bc76f68..08f6f72 100644
    s-gw aws plan|request|run [--wrapper CMD] [--timeout-ms 0] [--raw] -- AWS_ARGS...
    s-gw ssh request HANDLE --target user@host [--port 22] [--arg VALUE]
    s-gw ssh run HANDLE --target user@host [--port 22] [--] [remote command...]
+diff --git a/src/command-suggest.ts b/src/command-suggest.ts
+index 339d9bb252be3d0007f021ffed8246f790fefa4f..6f67005428acd88245dbc79df13970c15f3a35b0 100644
+--- a/src/command-suggest.ts
++++ b/src/command-suggest.ts
+@@ -67,7 +67,6 @@ export const KNOWN_COMMANDS = [
+   "requests cleanup",
+   "store backups",
+   "approve",
+-  "approve-policy",
+   "deny",
+   "execute",
+   "execute-next"
 diff --git a/tests/defenseclaw-runtime.test.ts b/tests/defenseclaw-runtime.test.ts
-index 336d567..6deaf1d 100644
+index 336d56782072f300832dce948b6b0fd446f06ab4..650c3328af066e538a8ec28b15b243558a4f0ffe 100644
 --- a/tests/defenseclaw-runtime.test.ts
 +++ b/tests/defenseclaw-runtime.test.ts
-@@ -41,15 +41,37 @@ describe("DefenseClaw local console launch", () => {
+@@ -41,15 +41,38 @@ describe("DefenseClaw local console launch", () => {
      expect(cli).not.toContain("startConsoleServer");
      expect(cli).not.toContain("function openBrowser");
      expect(cli).toContain("DefenseClaw owns the authenticated approval console");
@@ -187,6 +202,7 @@ index 336d567..6deaf1d 100644
 +      cli.indexOf('if (first === "mcp")')
 +    );
      expect(cli).not.toContain("  s-gw approve REQUEST_ID");
++    expect(cli).not.toContain("  s-gw approve-policy REQUEST_ID");
      expect(cli).not.toContain("  s-gw deny REQUEST_ID");
      expect(cli).not.toContain("  s-gw secret allow-command HANDLE");
      expect(cli).not.toContain("  s-gw secret set-inject-env HANDLE");
@@ -213,7 +229,15 @@ index 336d567..6deaf1d 100644
      expect(sourceText.join("\n")).not.toContain("s-gw approve");
      expect(tsconfig).toContain('"src/console-server.ts"');
    });
-@@ -105,6 +127,52 @@ describe("DefenseClaw local console launch", () => {
+@@ -58,6 +81,7 @@ describe("DefenseClaw local console launch", () => {
+     const policyAliases = ["add", "update", "edit", "arrange", "organize", "delete", "remove", "enable", "disable"];
+     const rejectedRoutes = [
+       ["approve", "req-test"],
++      ["approve-policy", "req-test"],
+       ["deny", "req-test"],
+       ["approval", "set"],
+       ["approval", "revoke"],
+@@ -105,6 +129,52 @@ describe("DefenseClaw local console launch", () => {
      }
    }, 45_000);
  
@@ -266,7 +290,7 @@ index 336d567..6deaf1d 100644
    it("stores a generated Linux unlock key through the Secret Service helper", async () => {
      const tmpDir = await mkdtemp(path.join(os.tmpdir(), "sgw-linux-setup-"));
      const helperPath = path.join(tmpDir, "s-gw-secret-service-helper");
-@@ -152,6 +220,7 @@ describe("DefenseClaw local console launch", () => {
+@@ -152,6 +222,7 @@ describe("DefenseClaw local console launch", () => {
        const stored = await readFile(database, "utf8");
  
        expect(setup).toMatchObject({ ok: true, unlock: "generated-keychain-passphrase" });
@@ -275,7 +299,7 @@ index 336d567..6deaf1d 100644
        expect(stored.trim().length).toBeGreaterThanOrEqual(8);
        expect(output).not.toContain(stored);
 diff --git a/tests/mcp-e2e.test.ts b/tests/mcp-e2e.test.ts
-index 2d80a18..6534fe4 100644
+index 2d80a182878f6e490ce4ed34dcc443558d0e1106..6534fe438b8b8d5fa51c2d88ac70143263bb77dd 100644
 --- a/tests/mcp-e2e.test.ts
 +++ b/tests/mcp-e2e.test.ts
 @@ -65,13 +65,12 @@ describe("MCP end-to-end flow", () => {

@@ -3,10 +3,10 @@
   "module_name": "s-gw",
   "package_name": "@s-gw/s-gw",
   "package_version": "0.2.0",
-  "upstream_package_version": "0.1.20",
+  "upstream_package_version": "0.1.21",
   "upstream_repository": "https://github.com/sgateway/s-gw.git",
-  "upstream_revision": "e4502cf7ef5a6e251c2162089836a521ea7ce7b2",
-  "upstream_tree": "e33048d46dde77ea717f4be0ef7a9f351d002f89",
+  "upstream_revision": "a2f4060d15f5fa23547f9414a20608714e1a5b96",
+  "upstream_tree": "3bab4c1e6b97211465bca0326d1dd82dc9bef1c1",
   "source_path": "third_party/s-gw/upstream",
   "source_inventory": "third_party/s-gw/SOURCE_MANIFEST.json",
   "patches": [

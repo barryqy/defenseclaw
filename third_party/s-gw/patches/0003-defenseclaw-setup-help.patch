@@ -1,4 +1,4 @@
-From dc63117cc80cdab2099b4e2af0c223842ff5cf0e Mon Sep 17 00:00:00 2001
+From 0ca775ab86e2185c335ab35cec5403e0f98648d2 Mon Sep 17 00:00:00 2001
 From: sgateway <299698546+sgateway@users.noreply.github.com>
 Date: Tue, 4 Aug 2026 14:50:19 -0700
 Subject: [PATCH 3/7] Keep restricted setup help side-effect free
@@ -9,7 +9,7 @@ Subject: [PATCH 3/7] Keep restricted setup help side-effect free
  2 files changed, 70 insertions(+), 12 deletions(-)
 
 diff --git a/src/cli.ts b/src/cli.ts
-index 08f6f72..63b0f69 100644
+index 8b5b01ecdf58c3c7ebe50bbac553c2016e01c9ad..7204e63dad127b6df01b4c67dc12d39dff215c01 100644
 --- a/src/cli.ts
 +++ b/src/cli.ts
 @@ -96,7 +96,7 @@ async function main(): Promise<void> {
@@ -21,7 +21,7 @@ index 08f6f72..63b0f69 100644
      return;
    }
  
-@@ -2374,19 +2374,18 @@ Approval and authorization changes are available through:
+@@ -2409,19 +2409,18 @@ Approval and authorization changes are available through:
  `);
  }
  
@@ -51,7 +51,7 @@ index 08f6f72..63b0f69 100644
  `);
  }
 diff --git a/tests/defenseclaw-runtime.test.ts b/tests/defenseclaw-runtime.test.ts
-index 6deaf1d..bfe3444 100644
+index 650c3328af066e538a8ec28b15b243558a4f0ffe..a1b5fb6490a051f48fc4a8507b32888804d2194f 100644
 --- a/tests/defenseclaw-runtime.test.ts
 +++ b/tests/defenseclaw-runtime.test.ts
 @@ -1,5 +1,5 @@
@@ -73,7 +73,7 @@ index 6deaf1d..bfe3444 100644
      expect(cli.indexOf("rejectDefenseClawAuthorizationMutation(first, second, third, parsed.flags)")).toBeLessThan(
        cli.indexOf("const store = new SecretStore()")
      );
-@@ -76,6 +81,60 @@ describe("DefenseClaw local console launch", () => {
+@@ -77,6 +82,60 @@ describe("DefenseClaw local console launch", () => {
      expect(tsconfig).toContain('"src/console-server.ts"');
    });
  

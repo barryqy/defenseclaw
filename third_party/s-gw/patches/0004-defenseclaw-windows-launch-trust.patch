@@ -1,4 +1,4 @@
-From 922672734a08f948b91336aa6c0591488d308737 Mon Sep 17 00:00:00 2001
+From f3a868e9fe32b69834b22099bef944992fc511bc Mon Sep 17 00:00:00 2001
 From: sgateway <299698546+sgateway@users.noreply.github.com>
 Date: Tue, 4 Aug 2026 14:53:42 -0700
 Subject: [PATCH 4/7] Adapt Windows launch trust to current upstream
@@ -9,7 +9,7 @@ Subject: [PATCH 4/7] Adapt Windows launch trust to current upstream
  2 files changed, 20 insertions(+), 6 deletions(-)
 
 diff --git a/src/install.ts b/src/install.ts
-index e9e50c0..ea3fa1c 100644
+index e9e50c06ad942bf0be143a98122c5e5f8dff369d..ea3fa1cf649349566a399d7c11787bd3334954a4 100644
 --- a/src/install.ts
 +++ b/src/install.ts
 @@ -837,7 +837,8 @@ export function stopWindowsSurfaces(options: WindowsSurfaceScope = {}): WindowsS
@@ -33,7 +33,7 @@ index e9e50c0..ea3fa1c 100644
    );
  
 diff --git a/tests/defenseclaw-runtime.test.ts b/tests/defenseclaw-runtime.test.ts
-index bfe3444..bf24e5e 100644
+index a1b5fb6490a051f48fc4a8507b32888804d2194f..b8ea5fd9a6d7eac3b6fd94d6fa55afb79e2b021c 100644
 --- a/tests/defenseclaw-runtime.test.ts
 +++ b/tests/defenseclaw-runtime.test.ts
 @@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
@@ -64,7 +64,7 @@ index bfe3444..bf24e5e 100644
    it("contains no TypeScript proxy-tokenizer or approval mutation fallback", async () => {
      const cli = await readFile(new URL("../src/cli.ts", import.meta.url), "utf8");
      const mcp = await readFile(new URL("../src/mcp-server.ts", import.meta.url), "utf8");
-@@ -160,7 +172,7 @@ describe("DefenseClaw local console launch", () => {
+@@ -162,7 +174,7 @@ describe("DefenseClaw local console launch", () => {
        const recoveryHome = path.join(tmpDir, "recovery");
  
        try {
@@ -73,7 +73,7 @@ index bfe3444..bf24e5e 100644
            cwd: repoRoot,
            encoding: "utf8",
            env: {
-@@ -206,7 +218,7 @@ describe("DefenseClaw local console launch", () => {
+@@ -208,7 +220,7 @@ describe("DefenseClaw local console launch", () => {
        const recoveryHome = path.join(tmpDir, "recovery");
  
        try {
@@ -82,7 +82,7 @@ index bfe3444..bf24e5e 100644
            cwd: repoRoot,
            encoding: "utf8",
            env: {
-@@ -255,7 +267,7 @@ describe("DefenseClaw local console launch", () => {
+@@ -257,7 +269,7 @@ describe("DefenseClaw local console launch", () => {
        await writeFile(helperPath, helper, { mode: 0o700 });
        await chmod(helperPath, 0o700);
        await writeFile(wrapper, wrapperSource);

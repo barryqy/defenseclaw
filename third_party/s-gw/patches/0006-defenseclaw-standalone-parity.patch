@@ -1,4 +1,4 @@
-From d07f7705e1eeb0224f80fb07cbf4401420502640 Mon Sep 17 00:00:00 2001
+From 1c167c813c7216b6dfb174e8a71b241368c8ab1e Mon Sep 17 00:00:00 2001
 From: barry <bayuan@cisco.com>
 Date: Wed, 5 Aug 2026 09:44:30 -0700
 Subject: [PATCH 6/7] Adapt DefenseClaw boundary to standalone parity
@@ -10,10 +10,10 @@ Subject: [PATCH 6/7] Adapt DefenseClaw boundary to standalone parity
  3 files changed, 75 insertions(+), 7 deletions(-)
 
 diff --git a/src/cli.ts b/src/cli.ts
-index 63b0f69..25cdb22 100644
+index 7204e63dad127b6df01b4c67dc12d39dff215c01..21b5d8ed6c99d72cdc50940c482f24645df8443c 100644
 --- a/src/cli.ts
 +++ b/src/cli.ts
-@@ -2253,6 +2253,10 @@ function rejectDefenseClawAuthorizationMutation(
+@@ -2288,6 +2288,10 @@ function rejectDefenseClawAuthorizationMutation(
    third: string | undefined,
    flags: Record<string, string | boolean | string[]>
  ): void {
@@ -25,7 +25,7 @@ index 63b0f69..25cdb22 100644
      throw nativeAuthorizationGuidance();
    }
 diff --git a/src/trusted-windows-command.ts b/src/trusted-windows-command.ts
-index 44b2872..c9b8a6b 100644
+index 44b2872f280558ce70dc6fba9da7269b3a8b7721..c9b8a6b6d500943136eddf7fd155cfc842491737 100644
 --- a/src/trusted-windows-command.ts
 +++ b/src/trusted-windows-command.ts
 @@ -1,4 +1,4 @@
@@ -74,7 +74,7 @@ index 44b2872..c9b8a6b 100644
 +  }
 +}
 diff --git a/tests/defenseclaw-runtime.test.ts b/tests/defenseclaw-runtime.test.ts
-index a76677d..b18343e 100644
+index 24a415752e01ca426939bf3f5d54342fd4b8fc2d..c95715b46c5995a44d1dccffac04acc6de3a4bae 100644
 --- a/tests/defenseclaw-runtime.test.ts
 +++ b/tests/defenseclaw-runtime.test.ts
 @@ -1,9 +1,10 @@
@@ -152,12 +152,12 @@ index a76677d..b18343e 100644
    it("contains no TypeScript proxy-tokenizer or approval mutation fallback", async () => {
      const cli = await readFile(new URL("../src/cli.ts", import.meta.url), "utf8");
      const mcp = await readFile(new URL("../src/mcp-server.ts", import.meta.url), "utf8");
-@@ -155,6 +196,8 @@ describe("DefenseClaw local console launch", () => {
+@@ -156,6 +197,8 @@ describe("DefenseClaw local console launch", () => {
    it("rejects approval and authorization mutations before creating store state", async () => {
      const policyAliases = ["add", "update", "edit", "arrange", "organize", "delete", "remove", "enable", "disable"];
      const rejectedRoutes = [
 +      ["__windows-login-start", "--payload", "untrusted"],
 +      ["__desktop-instance-key"],
        ["approve", "req-test"],
+       ["approve-policy", "req-test"],
        ["deny", "req-test"],
-       ["approval", "set"],
