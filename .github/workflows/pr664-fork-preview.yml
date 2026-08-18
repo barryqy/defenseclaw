@@ -412,6 +412,135 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
 
+          function Invoke-NativeCapture {
+            param(
+              [Parameter(Mandatory = $true)][string]$Command,
+              [Parameter(Mandatory = $true)][string[]]$Arguments
+            )
+
+            $items = @()
+            $exitCode = $null
+            $caught = $null
+            $previousPreference = $ErrorActionPreference
+            try {
+              $ErrorActionPreference = 'Continue'
+              $items = @(& $Command @Arguments 2>&1)
+              $exitCode = $LASTEXITCODE
+            } catch {
+              $caught = $_
+            } finally {
+              $ErrorActionPreference = $previousPreference
+            }
+            if ($null -ne $caught) { throw $caught }
+            if ($null -eq $exitCode) {
+              throw "The native command did not report an exit code: $Command"
+            }
+
+            $lines = @($items | ForEach-Object {
+              if ($null -ne $_) { $_.ToString().Trim() }
+            } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            return [pscustomobject]@{
+              ExitCode = [int]$exitCode
+              Lines = $lines
+              Text = ($lines -join "`n").Trim()
+            }
+          }
+
+          function Get-SgwStartupResidues {
+            param([Parameter(Mandatory = $true)][string]$StartupFolder)
+
+            return @(Get-ChildItem -LiteralPath $StartupFolder -Force -File |
+              Where-Object {
+                $_.Name -match '^\.s-gw-startup-(?:backup-)?[0-9a-f]{32}\.lnk$'
+              })
+          }
+
+          function Wait-SgwReadOnlyHelpers {
+            param(
+              [Parameter(Mandatory = $true)][string]$SgwPath,
+              [Parameter(Mandatory = $true)][string]$StartupFolder
+            )
+
+            $credentialTimeout = 'Windows Credential Manager helper timed out after 30000 ms.'
+            $unlockReady = $false
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              $capture = Invoke-NativeCapture -Command $SgwPath -Arguments @('unlock', 'status')
+              if ($capture.ExitCode -ne 0) {
+                throw 'Standalone s-gw unlock preflight failed.'
+              }
+              try {
+                $unlock = $capture.Text | ConvertFrom-Json
+              } catch {
+                throw 'Standalone s-gw unlock preflight returned invalid JSON.'
+              }
+              if ($unlock.envConfigured -ne $false -or
+                  [string]$unlock.keychain.provider -cne 'windows-helper') {
+                throw 'Standalone s-gw unlock preflight did not use Windows Credential Manager.'
+              }
+
+              $missing = [string]$unlock.keychain.state -ceq 'missing' -and
+                $unlock.keychain.configured -eq $false -and
+                [string]$unlock.activeSource -ceq 'none'
+              $configured = [string]$unlock.keychain.state -ceq 'configured' -and
+                $unlock.keychain.configured -eq $true -and
+                [string]$unlock.activeSource -ceq 'windows-credential-manager'
+              if ($missing -or $configured) {
+                $unlockReady = $true
+                break
+              }
+              $timedOut = [string]$unlock.keychain.state -ceq 'unavailable' -and
+                $unlock.keychain.configured -eq $false -and
+                [string]$unlock.activeSource -ceq 'none' -and
+                [string]$unlock.keychain.error -ceq $credentialTimeout
+              if (-not $timedOut -or $attempt -eq 3) {
+                throw 'Standalone s-gw could not verify Windows Credential Manager.'
+              }
+              Start-Sleep -Seconds 2
+            }
+            if (-not $unlockReady) {
+              throw 'Standalone s-gw Windows Credential Manager preflight did not complete.'
+            }
+
+            $trustedPowerShell = Join-Path (
+              [Environment]::SystemDirectory
+            ) 'WindowsPowerShell\v1.0\powershell.exe'
+            $startupTimeout = (
+              's-gw error: Could not manage the Windows login startup: ' +
+              "spawnSync $trustedPowerShell ETIMEDOUT"
+            )
+            $startupReady = $false
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              $capture = Invoke-NativeCapture -Command $SgwPath -Arguments @('service', 'status')
+              if ($capture.ExitCode -eq 0) {
+                try {
+                  $null = $capture.Text | ConvertFrom-Json
+                } catch {
+                  throw 'Standalone s-gw service preflight returned invalid JSON.'
+                }
+                $startupReady = $true
+                break
+              }
+              $timedOut = $capture.ExitCode -eq 1 -and
+                @($capture.Lines).Count -eq 1 -and
+                [string]::Equals(
+                  [string]$capture.Lines[0],
+                  $startupTimeout,
+                  [StringComparison]::OrdinalIgnoreCase
+                )
+              if (-not $timedOut -or $attempt -eq 3) {
+                throw 'Standalone s-gw service preflight failed.'
+              }
+              Start-Sleep -Seconds 2
+            }
+            if (-not $startupReady) {
+              throw 'Standalone s-gw Windows Startup preflight did not complete.'
+            }
+
+            if (@(Get-SgwStartupResidues -StartupFolder $StartupFolder).Count -ne 0) {
+              throw 'The Windows Startup folder contains an incomplete s-gw shortcut transaction.'
+            }
+          }
+
           function Initialize-UserStartupFolder {
             if ($env:SGW_TEST_MODE -eq '1' -or
                 -not [string]::IsNullOrWhiteSpace($env:SGW_WINDOWS_STARTUP_TEST_ROOT)) {
@@ -682,6 +811,7 @@ jobs:
             throw 'The installed standalone s-gw package identity is wrong.'
           }
 
+          Wait-SgwReadOnlyHelpers -SgwPath $sgwPath -StartupFolder $startupFolder
           & $sgwPath setup --no-open-app --no-agents
           if ($LASTEXITCODE -ne 0) { throw 'Standalone s-gw setup failed.' }
           $serviceRaw = (& $sgwPath service status | Out-String)
@@ -704,6 +834,9 @@ jobs:
                 [StringComparison]::OrdinalIgnoreCase
               )) {
             throw 'Standalone s-gw login service is not fully active and managed.'
+          }
+          if (@(Get-SgwStartupResidues -StartupFolder $startupFolder).Count -ne 0) {
+            throw 'Standalone s-gw left an incomplete Windows Startup shortcut transaction.'
           }
           & $sgwPath agent install codex --dry-run
           if ($LASTEXITCODE -ne 0) { throw 'Standalone s-gw Codex dry-run failed.' }
