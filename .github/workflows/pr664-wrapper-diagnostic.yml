@@ -160,7 +160,7 @@ jobs:
           -PreviewBundleName $env:BUNDLE_NAME
           -PreviewNodeArchiveName $env:PREVIEW_NODE_ARCHIVE
           -NoCredentialProtection
-          -TimeoutSeconds 3600
+          -TimeoutSeconds 600
 
       - name: Upload bounded wrapper diagnostics
         if: ${{ always() }}
