@@ -1,0 +1,212 @@
+diff --git a/scripts/invoke-windows-setup-standard-user-ci.ps1 b/scripts/invoke-windows-setup-standard-user-ci.ps1
+index 4390b93d..3f7a3f4c 100644
+--- a/scripts/invoke-windows-setup-standard-user-ci.ps1
++++ b/scripts/invoke-windows-setup-standard-user-ci.ps1
+@@ -20 +20,7 @@ param(
+-    [ValidateSet('setup-acceptance', 'bootstrap-acceptance', 'wizard-smoke', 'contract')]
++    [ValidateSet(
++        'setup-acceptance',
++        'bootstrap-acceptance',
++        'wizard-smoke',
++        'contract',
++        'preview-wrapper'
++    )]
+@@ -35 +41,3 @@ param(
+-    [string]$ResultPath = ''
++    [string]$ResultPath = '',
++    [string]$PreviewBundleName = '',
++    [string]$PreviewNodeArchiveName = ''
+@@ -41,2 +49,3 @@ $ErrorActionPreference = 'Stop'
+-if ($NoCredentialProtection -and $Mode -notin @('setup-acceptance', 'contract')) {
+-    throw '-NoCredentialProtection is restricted to source-only Setup acceptance and connector contracts'
++if ($NoCredentialProtection -and
++    $Mode -notin @('setup-acceptance', 'contract', 'preview-wrapper')) {
++    throw '-NoCredentialProtection is restricted to source-only Setup acceptance, connector contracts, and the source-only preview wrapper'
+@@ -95,0 +105,104 @@ function Test-IsAdministrator {
++function Assert-PreviewArchiveName([string]$Name, [string]$Label) {
++    if ([string]::IsNullOrWhiteSpace($Name) -or
++        $Name.Length -gt 160 -or
++        $Name -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]*\.zip$' -or
++        [IO.Path]::GetFileName($Name) -cne $Name) {
++        throw "$Label must be a simple ZIP filename"
++    }
++}
++
++function Protect-PreviewDirectory([string]$Path) {
++    $directory = [IO.Directory]::CreateDirectory([IO.Path]::GetFullPath($Path))
++    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
++    if ($null -eq $identity.User) { throw 'current Windows identity has no user SID' }
++    $security = [Security.AccessControl.DirectorySecurity]::new()
++    $security.SetOwner($identity.User)
++    $security.SetAccessRuleProtection($true, $false)
++    $inheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
++        [Security.AccessControl.InheritanceFlags]::ObjectInherit
++    foreach ($sid in @(
++        $identity.User,
++        [Security.Principal.SecurityIdentifier]::new('S-1-5-18'),
++        [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
++    )) {
++        [void]$security.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
++            $sid,
++            [Security.AccessControl.FileSystemRights]::FullControl,
++            $inheritance,
++            [Security.AccessControl.PropagationFlags]::None,
++            [Security.AccessControl.AccessControlType]::Allow
++        ))
++    }
++    [IO.FileSystemAclExtensions]::SetAccessControl($directory, $security)
++}
++
++function New-PreviewCodexFixture([string]$State) {
++    $compiler = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
++    if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
++        throw "Windows .NET Framework compiler is unavailable: $compiler"
++    }
++    $localAppData = [Environment]::GetFolderPath(
++        [Environment+SpecialFolder]::LocalApplicationData
++    )
++    if ([string]::IsNullOrWhiteSpace($localAppData)) {
++        throw 'disposable user has no LocalApplicationData known folder'
++    }
++    $codexTrustedRoot = Join-Path $localAppData 'OpenAI\Codex\bin'
++    $codexBin = Join-Path $codexTrustedRoot (
++        '000-defenseclaw-ci-preview-' + [guid]::NewGuid().ToString('N')
++    )
++    Protect-PreviewDirectory $codexTrustedRoot
++    Protect-PreviewDirectory $codexBin
++    $codexPath = Join-Path $codexBin 'codex.exe'
++    $sourcePath = Join-Path $State 'preview-codex-fixture.cs'
++    $source = @"
++using System;
++public static class PreviewCodexFixture {
++    public static int Main(string[] arguments) {
++        if (arguments.Length == 2 &&
++            String.Equals(arguments[0], "app-server", StringComparison.Ordinal) &&
++            String.Equals(arguments[1], "--stdio", StringComparison.Ordinal)) {
++            string line;
++            while ((line = Console.ReadLine()) != null) {
++                if (line.IndexOf("\"method\":\"initialize\"", StringComparison.Ordinal) >= 0) {
++                    Console.WriteLine("{\"id\":1,\"result\":{}}");
++                    Console.Out.Flush();
++                } else if (line.IndexOf("\"method\":\"configRequirements/read\"", StringComparison.Ordinal) >= 0) {
++                    Console.WriteLine("{\"id\":2,\"result\":{\"requirements\":{\"allowManagedHooksOnly\":false}}}");
++                    Console.Out.Flush();
++                }
++            }
++            return 0;
++        }
++        Console.WriteLine("codex-cli 0.133.0");
++        return 0;
++    }
++}
++"@
++    [IO.File]::WriteAllText($sourcePath, $source, [Text.UTF8Encoding]::new($false))
++    try {
++        & $compiler /nologo /target:exe "/out:$codexPath" $sourcePath
++        if ($LASTEXITCODE -ne 0 -or
++            -not (Test-Path -LiteralPath $codexPath -PathType Leaf)) {
++            throw "Could not build the native Codex preview fixture: $codexPath"
++        }
++    } finally {
++        if (Test-Path -LiteralPath $sourcePath -PathType Leaf) {
++            [IO.File]::Delete($sourcePath)
++        }
++    }
++    $version = (& $codexPath --version | Out-String).Trim()
++    if ($LASTEXITCODE -ne 0 -or $version -cne 'codex-cli 0.133.0') {
++        throw "Native Codex preview fixture returned an unexpected version: $version"
++    }
++    return $codexPath
++}
++
++if ($Mode -eq 'preview-wrapper') {
++    Assert-PreviewArchiveName $PreviewBundleName 'PreviewBundleName'
++    Assert-PreviewArchiveName $PreviewNodeArchiveName 'PreviewNodeArchiveName'
++    if ($PreviewBundleName -ceq $PreviewNodeArchiveName) {
++        throw 'preview bundle and Node archive names must differ'
++    }
++}
++
+@@ -408,0 +522,28 @@ function Invoke-ChildMode {
++        } elseif ($Mode -eq 'preview-wrapper') {
++            $nodeArchive = Join-Path $artifacts $PreviewNodeArchiveName
++            $bundleArchive = Join-Path $artifacts $PreviewBundleName
++            $nodeRoot = Join-Path $state 'preview-node'
++            $bundleRoot = Join-Path $state 'preview-bundle'
++            Expand-Archive -LiteralPath $nodeArchive -DestinationPath $nodeRoot
++            Expand-Archive -LiteralPath $bundleArchive -DestinationPath $bundleRoot
++
++            $nodeExe = Join-Path $nodeRoot 'node.exe'
++            $npmCmd = Join-Path $nodeRoot 'npm.cmd'
++            if (-not (Test-Path -LiteralPath $nodeExe -PathType Leaf) -or
++                -not (Test-Path -LiteralPath $npmCmd -PathType Leaf)) {
++                throw 'preview Node archive is missing node.exe or npm.cmd at its root'
++            }
++            $nodeVersion = (& $nodeExe --version | Out-String).Trim()
++            if ($LASTEXITCODE -ne 0 -or $nodeVersion -cne 'v20.19.5') {
++                throw "preview wrapper requires exact Node v20.19.5, found $nodeVersion"
++            }
++            $codexPath = New-PreviewCodexFixture $state
++            $env:PATH = "$nodeRoot;$(Split-Path -Parent $codexPath);$env:PATH"
++            $windowsPowerShell = Join-Path $env:SystemRoot `
++                'System32\WindowsPowerShell\v1.0\powershell.exe'
++            $installer = Join-Path $bundleRoot 'Install-Preview.ps1'
++            & $windowsPowerShell -NoLogo -NoProfile -NonInteractive `
++                -ExecutionPolicy Bypass -File $installer
++            if ($LASTEXITCODE -ne 0) {
++                throw "preview wrapper exited with code $LASTEXITCODE"
++            }
+@@ -852,0 +994,17 @@ $bootstrapCosignSha256 = 'DD6C61E510DA627BCAED4CD9DB844EC11CACD09826D814D89F7F68
++$previewSourceHashes = @{}
++if ($Mode -eq 'preview-wrapper') {
++    foreach ($archiveName in @($PreviewBundleName, $PreviewNodeArchiveName)) {
++        $archivePath = Join-Path $artifactSource $archiveName
++        $null = Assert-DisposableNoReparseAncestors -Path $archivePath `
++            -AllowedRoot $artifactSource -RequireExists
++        $archiveItem = Get-Item -LiteralPath $archivePath -Force -ErrorAction Stop
++        if ($archiveItem.PSIsContainer -or
++            ($archiveItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
++            $archiveItem.Length -le 0 -or $archiveItem.Length -gt 1073741824) {
++            throw "preview input must be a bounded regular file: $archivePath"
++        }
++        $previewSourceHashes[$archiveName] = (
++            Get-FileHash -LiteralPath $archivePath -Algorithm SHA256
++        ).Hash
++    }
++}
+@@ -1057,0 +1216,14 @@ try {
++    if ($Mode -eq 'preview-wrapper') {
++        foreach ($archiveName in @($PreviewBundleName, $PreviewNodeArchiveName)) {
++            $childArchive = Join-Path $childArtifacts $archiveName
++            [IO.File]::Copy(
++                (Join-Path $artifactSource $archiveName),
++                $childArchive,
++                $false
++            )
++            if ((Get-FileHash -LiteralPath $childArchive -Algorithm SHA256).Hash -cne
++                [string]$previewSourceHashes[$archiveName]) {
++                throw "disposable-user preview copy does not match the exact input: $archiveName"
++            }
++        }
++    }
+@@ -1170,0 +1343,6 @@ try {
++    if ($Mode -eq 'preview-wrapper') {
++        $arguments += @(
++            '-PreviewBundleName', $PreviewBundleName,
++            '-PreviewNodeArchiveName', $PreviewNodeArchiveName
++        )
++    }
+@@ -1261,0 +1440,13 @@ try {
++    if ($Mode -eq 'preview-wrapper') {
++        foreach ($archiveName in @($PreviewBundleName, $PreviewNodeArchiveName)) {
++            $expectedHash = [string]$previewSourceHashes[$archiveName]
++            $sourcePath = Join-Path $artifactSource $archiveName
++            $childPath = Join-Path $childArtifacts $archiveName
++            if ((Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash -cne
++                $expectedHash -or
++                (Get-FileHash -LiteralPath $childPath -Algorithm SHA256).Hash -cne
++                $expectedHash) {
++                throw "exact preview input changed during acceptance: $archiveName"
++            }
++        }
++    }
