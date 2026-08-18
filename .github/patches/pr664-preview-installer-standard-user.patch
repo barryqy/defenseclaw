@@ -1,5 +1,5 @@
 diff --git a/scripts/invoke-windows-setup-standard-user-ci.ps1 b/scripts/invoke-windows-setup-standard-user-ci.ps1
-index 4390b93d..3f7a3f4c 100644
+index 4390b93d..ad3b1e0a 100644
 --- a/scripts/invoke-windows-setup-standard-user-ci.ps1
 +++ b/scripts/invoke-windows-setup-standard-user-ci.ps1
 @@ -20 +20,7 @@ param(
@@ -127,7 +127,7 @@ index 4390b93d..3f7a3f4c 100644
 +    }
 +}
 +
-@@ -408,0 +522,28 @@ function Invoke-ChildMode {
+@@ -408,0 +522,31 @@ function Invoke-ChildMode {
 +        } elseif ($Mode -eq 'preview-wrapper') {
 +            $nodeArchive = Join-Path $artifacts $PreviewNodeArchiveName
 +            $bundleArchive = Join-Path $artifacts $PreviewBundleName
@@ -151,12 +151,44 @@ index 4390b93d..3f7a3f4c 100644
 +            $windowsPowerShell = Join-Path $env:SystemRoot `
 +                'System32\WindowsPowerShell\v1.0\powershell.exe'
 +            $installer = Join-Path $bundleRoot 'Install-Preview.ps1'
++            $previewStdout = Join-Path $expectedDiagnostics 'preview-wrapper.stdout.log'
++            $previewStderr = Join-Path $expectedDiagnostics 'preview-wrapper.stderr.log'
 +            & $windowsPowerShell -NoLogo -NoProfile -NonInteractive `
-+                -ExecutionPolicy Bypass -File $installer
++                -ExecutionPolicy Bypass -File $installer `
++                1> $previewStdout 2> $previewStderr
 +            if ($LASTEXITCODE -ne 0) {
 +                throw "preview wrapper exited with code $LASTEXITCODE"
 +            }
-@@ -852,0 +994,17 @@ $bootstrapCosignSha256 = 'DD6C61E510DA627BCAED4CD9DB844EC11CACD09826D814D89F7F68
+@@ -434,13 +578,15 @@ function Invoke-ChildMode {
+-            try {
+-                & $nativeHarness -Operation capture -StateRoot $state `
+-                    -DiagnosticsRoot ([IO.Path]::GetFullPath($DiagnosticsRoot))
+-            } catch {
+-                $failure = [Management.Automation.ErrorRecord]::new(
+-                    [InvalidOperationException]::new(
+-                        "$($failure.Exception.Message); diagnostic capture failed: $($_.Exception.Message)",
+-                        $failure.Exception
+-                    ),
+-                    'DisposableUserDiagnosticCaptureFailed',
+-                    [Management.Automation.ErrorCategory]::OperationStopped,
+-                    $state
+-                )
++            if ($Mode -ne 'preview-wrapper') {
++                try {
++                    & $nativeHarness -Operation capture -StateRoot $state `
++                        -DiagnosticsRoot ([IO.Path]::GetFullPath($DiagnosticsRoot))
++                } catch {
++                    $failure = [Management.Automation.ErrorRecord]::new(
++                        [InvalidOperationException]::new(
++                            "$($failure.Exception.Message); diagnostic capture failed: $($_.Exception.Message)",
++                            $failure.Exception
++                        ),
++                        'DisposableUserDiagnosticCaptureFailed',
++                        [Management.Automation.ErrorCategory]::OperationStopped,
++                        $state
++                    )
++                }
+@@ -852,0 +999,17 @@ $bootstrapCosignSha256 = 'DD6C61E510DA627BCAED4CD9DB844EC11CACD09826D814D89F7F68
 +$previewSourceHashes = @{}
 +if ($Mode -eq 'preview-wrapper') {
 +    foreach ($archiveName in @($PreviewBundleName, $PreviewNodeArchiveName)) {
@@ -174,7 +206,7 @@ index 4390b93d..3f7a3f4c 100644
 +        ).Hash
 +    }
 +}
-@@ -1057,0 +1216,14 @@ try {
+@@ -1057,0 +1221,14 @@ try {
 +    if ($Mode -eq 'preview-wrapper') {
 +        foreach ($archiveName in @($PreviewBundleName, $PreviewNodeArchiveName)) {
 +            $childArchive = Join-Path $childArtifacts $archiveName
@@ -189,14 +221,14 @@ index 4390b93d..3f7a3f4c 100644
 +            }
 +        }
 +    }
-@@ -1170,0 +1343,6 @@ try {
+@@ -1170,0 +1348,6 @@ try {
 +    if ($Mode -eq 'preview-wrapper') {
 +        $arguments += @(
 +            '-PreviewBundleName', $PreviewBundleName,
 +            '-PreviewNodeArchiveName', $PreviewNodeArchiveName
 +        )
 +    }
-@@ -1261,0 +1440,13 @@ try {
+@@ -1261,0 +1445,13 @@ try {
 +    if ($Mode -eq 'preview-wrapper') {
 +        foreach ($archiveName in @($PreviewBundleName, $PreviewNodeArchiveName)) {
 +            $expectedHash = [string]$previewSourceHashes[$archiveName]

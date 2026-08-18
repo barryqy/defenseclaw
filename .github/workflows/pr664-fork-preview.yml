@@ -23,7 +23,7 @@ env:
   SIGNER_WORKFLOW: barryqy/defenseclaw/.github/workflows/pr664-fork-preview.yml
   BUNDLE_NAME: PR664-UNSIGNED-SOURCE-ONLY-NO-SGW-RUNTIME-51bd6d4-windows-x64.zip
   PREVIEW_NODE_ARCHIVE: node-v20.19.5-win-x64-ci.zip
-  PREVIEW_HARNESS_PATCH_SHA256: 34b214c5414e709ffbbb548ac524aa4206d72aa68c0cc84ebf524056f0b76fdb
+  PREVIEW_HARNESS_PATCH_SHA256: 7df208fc6923590f4233a1d6e12e3ebc743b8312ce0cb148b0add3b35cfa1b02
 
 jobs:
   validate:
@@ -1032,7 +1032,7 @@ jobs:
       - name: Initialize isolated connector paths
         run: >-
           ./scripts/initialize-windows-native-ci-paths.ps1
-          -Leaf preview-codex-contract
+          -Leaf ct-codex
           -DiagnosticsLeaf preview-codex-contract-diagnostics
           -ArtifactLeaf preview-dist
 
