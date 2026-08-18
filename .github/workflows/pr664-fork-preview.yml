@@ -175,8 +175,6 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $removed.ok -ne $true) {
             throw 'Standalone s-gw Codex cleanup failed'
           }
-          & $sgw service uninstall | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw 'Standalone s-gw service cleanup failed' }
           $final = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8
           if ($final -cne $sentinel) {
             throw 'Standalone s-gw cleanup did not restore the original Codex configuration'
