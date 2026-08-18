@@ -556,12 +556,18 @@ jobs:
             [IO.File]::Copy($setupPayload, $tmpSetup, $false)
             $tmpHash = (Get-FileHash -LiteralPath $tmpSetup -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($tmpHash -cne $actual) { throw 'Temporary Setup copy changed.' }
-            $setup = Start-Process -FilePath $tmpSetup -Wait -PassThru -ArgumentList @(
+            $setup = Start-Process -FilePath $tmpSetup -PassThru -ArgumentList @(
               '/quiet', '/norestart', 'INSTALLSCOPE=user', 'CONNECTOR=codex',
               'MODE=observe', 'STARTGATEWAY=1', 'CREDENTIALPROTECTION=0'
             )
-            if ($setup.ExitCode -notin 0, 3010) {
-              throw "DefenseClaw Setup failed with exit code $($setup.ExitCode)."
+            try {
+              $setup.WaitForExit()
+              $setupExitCode = $setup.ExitCode
+            } finally {
+              $setup.Dispose()
+            }
+            if ($setupExitCode -notin 0, 3010) {
+              throw "DefenseClaw Setup failed with exit code $setupExitCode."
             }
           } finally {
             if (Test-Path -LiteralPath $tmpSetup -PathType Leaf) { [IO.File]::Delete($tmpSetup) }
