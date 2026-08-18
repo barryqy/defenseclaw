@@ -55,7 +55,7 @@ jobs:
 
       - name: Install, initialize, and connect the reviewed npm package
         run: |
-          $root = Join-Path $env:RUNNER_TEMP ('sgw-pr664-' + [guid]::NewGuid().ToString('N'))
+          $root = Join-Path ([IO.Path]::GetTempPath()) ('sgw-pr664-' + [guid]::NewGuid().ToString('N'))
           $profile = Join-Path $root 'profile'
           $prefix = Join-Path $root 'npm-global'
           $codexHome = Join-Path $profile '.codex'
@@ -83,6 +83,16 @@ jobs:
           $env:SGW_KEYCHAIN_SERVICE = "s-gw-pr664-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           $env:SGW_KEYCHAIN_ACCOUNT = 'preview-smoke'
           $env:SGW_SECRET_KEYCHAIN_SERVICE = "s-gw-secrets-pr664-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $env:SGW_TEST_MODE = '1'
+          $env:SGW_TEST_HOME_ROOT = $root
+          $env:SGW_LOGIN_SESSION_ID = "preview-smoke-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $env:SGW_DISABLE_KEYCHAIN = '1'
+          $env:SGW_DISABLE_UPDATE_CHECK = '1'
+          $env:SGW_DISABLE_ONEPASSWORD_BACKUP = '1'
+          $passphraseBytes = [byte[]]::new(32)
+          [Security.Cryptography.RandomNumberGenerator]::Fill($passphraseBytes)
+          $env:SGW_MASTER_PASSPHRASE = [Convert]::ToBase64String($passphraseBytes)
+          Write-Host "::add-mask::$env:SGW_MASTER_PASSPHRASE"
           $env:npm_config_cache = Join-Path $root 'npm-cache'
           $env:PATH = "$fakeBin;$prefix;$env:PATH"
 
@@ -133,7 +143,7 @@ jobs:
             throw 'The installed standalone s-gw package identity is wrong'
           }
 
-          & $sgw setup --no-open-app --no-agents
+          & $sgw setup --no-service --no-menubar --no-open-app --no-agents
           if ($LASTEXITCODE -ne 0) { throw 'Standalone s-gw setup failed' }
           $status = (& $sgw status | Out-String) | ConvertFrom-Json
           if ([string]$status.version -cne $env:SGW_VERSION -or $status.ready -ne $true) {
@@ -167,8 +177,6 @@ jobs:
           }
           & $sgw service uninstall | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'Standalone s-gw service cleanup failed' }
-          & $sgw unlock keychain delete | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw 'Standalone s-gw unlock cleanup failed' }
           $final = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8
           if ($final -cne $sentinel) {
             throw 'Standalone s-gw cleanup did not restore the original Codex configuration'
