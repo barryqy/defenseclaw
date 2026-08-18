@@ -114,7 +114,56 @@ jobs:
           [IO.Directory]::CreateDirectory($acceptedRoot) | Out-Null
           $bundle = Join-Path $env:DC_ARTIFACT_ROOT $env:BUNDLE_NAME
           Expand-Archive -LiteralPath $bundle -DestinationPath $extractRoot
-          & (Join-Path $extractRoot 'Install-Preview.ps1') -VerifyOnly
+          $installer = Join-Path $extractRoot 'Install-Preview.ps1'
+          & $installer -VerifyOnly
+
+          $lines = [Collections.Generic.List[string]]::new()
+          foreach ($line in Get-Content -LiteralPath $installer -Encoding UTF8) {
+            [void]$lines.Add($line)
+          }
+          $markers = [ordered]@{
+            '$identity = [Security.Principal.WindowsIdentity]::GetCurrent()' = 'preflight-start'
+            '$installedCli = Join-Path $env:LOCALAPPDATA' = 'preflight-complete'
+            '$setup = Start-Process -FilePath $tmpSetup' = 'defenseclaw-setup-start'
+            'if ($setup.ExitCode -notin 0, 3010)' = 'defenseclaw-setup-returned'
+            '$defenseclaw = $installedCli' = 'defenseclaw-verify-start'
+            '& npm.cmd install --global' = 'sgw-npm-install-start'
+            '$npmPrefix = (& npm.cmd prefix --global).Trim()' = 'sgw-npm-install-complete'
+            '& $sgwPath setup --no-open-app --no-agents' = 'sgw-setup-start'
+            '& $sgwPath agent install codex --dry-run' = 'sgw-setup-complete'
+            '$sgwStatus = (& $sgwPath status' = 'sgw-agent-install-complete'
+          }
+          foreach ($entry in $markers.GetEnumerator()) {
+            $matches = @()
+            for ($index = 0; $index -lt $lines.Count; $index++) {
+              if ($lines[$index].TrimStart().StartsWith(
+                  [string]$entry.Key,
+                  [StringComparison]::Ordinal
+              )) {
+                $matches += $index
+              }
+            }
+            if ($matches.Count -ne 1) {
+              throw "Diagnostic marker anchor is not unique: $($entry.Key)"
+            }
+            $line = $lines[$matches[0]]
+            $indent = $line.Substring(0, $line.Length - $line.TrimStart().Length)
+            $lines.Insert(
+              $matches[0],
+              ($indent + "Write-Host 'diagnostic-phase: $($entry.Value)'")
+            )
+          }
+          [IO.File]::WriteAllLines($installer, $lines, [Text.UTF8Encoding]::new($false))
+          $tokens = $null
+          $parseErrors = $null
+          [Management.Automation.Language.Parser]::ParseFile(
+            $installer,
+            [ref]$tokens,
+            [ref]$parseErrors
+          ) | Out-Null
+          if (@($parseErrors).Count -ne 0) {
+            throw "Diagnostic-instrumented installer failed to parse: $($parseErrors -join '; ')"
+          }
 
           $payloadSetup = Join-Path $extractRoot 'payload\DefenseClawSetup-x64.preview-payload'
           $rawSetup = Join-Path $env:DC_ARTIFACT_ROOT 'DefenseClawSetup-x64.exe'
@@ -124,7 +173,9 @@ jobs:
           }
           Copy-Item -LiteralPath $payloadSetup `
             -Destination (Join-Path $acceptedRoot 'DefenseClawSetup-x64.exe')
-          Copy-Item -LiteralPath $bundle -Destination $acceptedRoot
+          Compress-Archive -Path (Join-Path $extractRoot '*') `
+            -DestinationPath (Join-Path $acceptedRoot $env:BUNDLE_NAME) `
+            -CompressionLevel Optimal
           foreach ($name in @(
               'DefenseClawWindowsResourceVerifier-x64.exe',
               'DefenseClawWindowsResourceIcon.png',
@@ -150,7 +201,7 @@ jobs:
           )
           "ACCEPTED_ARTIFACT_ROOT=$acceptedRoot" >> $env:GITHUB_ENV
 
-      - name: Run the exact shipped installer as a disposable standard user
+      - name: Run the diagnostic-instrumented installer as a disposable standard user
         run: >-
           ./scripts/invoke-windows-setup-standard-user-ci.ps1
           -Mode preview-wrapper
