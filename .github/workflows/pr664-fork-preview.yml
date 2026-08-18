@@ -412,6 +412,84 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
 
+          function Initialize-UserStartupFolder {
+            if ($env:SGW_TEST_MODE -eq '1' -or
+                -not [string]::IsNullOrWhiteSpace($env:SGW_WINDOWS_STARTUP_TEST_ROOT)) {
+              throw 'This preview installer requires the real Windows Startup folder.'
+            }
+            $profile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+            $startup = [Environment]::GetFolderPath(
+              [Environment+SpecialFolder]::Startup,
+              [Environment+SpecialFolderOption]::DoNotVerify
+            )
+            if ([string]::IsNullOrWhiteSpace($profile) -or
+                [string]::IsNullOrWhiteSpace($startup) -or
+                -not [IO.Path]::IsPathRooted($startup)) {
+              throw 'The current user Startup folder is unavailable.'
+            }
+
+            $separator = [IO.Path]::DirectorySeparatorChar
+            $profilePath = [IO.Path]::GetFullPath($profile).TrimEnd($separator)
+            $startupPath = [IO.Path]::GetFullPath($startup).TrimEnd($separator)
+            if ([Uri]::new($startupPath).IsUnc) {
+              throw 'The current user Startup folder must be local.'
+            }
+            $drive = [IO.DriveInfo]::new([IO.Path]::GetPathRoot($startupPath))
+            if ($drive.DriveType -ne [IO.DriveType]::Fixed) {
+              throw 'The current user Startup folder must use a fixed drive.'
+            }
+            $profilePrefix = $profilePath + $separator
+            if (-not [string]::Equals(
+                  $startupPath,
+                  $profilePath,
+                  [StringComparison]::OrdinalIgnoreCase
+                ) -and -not $startupPath.StartsWith(
+                  $profilePrefix,
+                  [StringComparison]::OrdinalIgnoreCase
+                )) {
+              throw 'The current user Startup folder must stay inside the user profile.'
+            }
+
+            $cursor = $startupPath
+            while ($true) {
+              if ([IO.File]::Exists($cursor)) {
+                throw "The current user Startup path is blocked by a file: $cursor"
+              }
+              if ([IO.Directory]::Exists($cursor)) {
+                $info = [IO.DirectoryInfo]::new($cursor)
+                $info.Refresh()
+                if (($info.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                  throw "The current user Startup path uses a reparse point: $cursor"
+                }
+              }
+              if ([string]::Equals(
+                    $cursor,
+                    $profilePath,
+                    [StringComparison]::OrdinalIgnoreCase
+                  )) {
+                break
+              }
+              $parent = [IO.Directory]::GetParent($cursor)
+              if ($null -eq $parent) {
+                throw 'The current user Startup folder could not be anchored to the user profile.'
+              }
+              $cursor = $parent.FullName.TrimEnd($separator)
+            }
+
+            [IO.Directory]::CreateDirectory($startupPath) | Out-Null
+            $verified = [Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)
+            if ([string]::IsNullOrWhiteSpace($verified) -or
+                -not [IO.Directory]::Exists($verified) -or
+                -not [string]::Equals(
+                  [IO.Path]::GetFullPath($verified).TrimEnd($separator),
+                  $startupPath,
+                  [StringComparison]::OrdinalIgnoreCase
+                )) {
+              throw 'The current user Startup folder could not be verified after creation.'
+            }
+            return $startupPath
+          }
+
           if ($env:OS -cne 'Windows_NT') {
             throw 'This preview installer requires native Windows.'
           }
@@ -549,6 +627,8 @@ jobs:
             throw 'Remove the existing DefenseClaw installation before using this disposable preview.'
           }
 
+          $startupFolder = Initialize-UserStartupFolder
+
           $tmpRoot = Join-Path ([IO.Path]::GetTempPath()) ('dc-pr664-' + [guid]::NewGuid().ToString('N'))
           $tmpSetup = Join-Path $tmpRoot 'DefenseClawSetup-x64.exe'
           [IO.Directory]::CreateDirectory($tmpRoot) | Out-Null
@@ -604,6 +684,27 @@ jobs:
 
           & $sgwPath setup --no-open-app --no-agents
           if ($LASTEXITCODE -ne 0) { throw 'Standalone s-gw setup failed.' }
+          $serviceRaw = (& $sgwPath service status | Out-String)
+          if ($LASTEXITCODE -ne 0) { throw 'Standalone s-gw service status failed.' }
+          $serviceStatus = $serviceRaw | ConvertFrom-Json
+          $expectedShortcut = Join-Path $startupFolder 's-gw Credential Gateway.lnk'
+          if ($serviceStatus.installed -ne $true -or
+              $serviceStatus.managed -ne $true -or
+              $serviceStatus.current -ne $true -or
+              $serviceStatus.enabled -ne $true -or
+              $serviceStatus.collision -ne $false -or
+              $serviceStatus.active -ne $true -or
+              $serviceStatus.helperActive -ne $true -or
+              $serviceStatus.config.port -ne 8718 -or
+              $serviceStatus.config.tray -ne $true -or
+              -not (Test-Path -LiteralPath $expectedShortcut -PathType Leaf) -or
+              -not [string]::Equals(
+                [IO.Path]::GetFullPath([string]$serviceStatus.shortcutPath),
+                [IO.Path]::GetFullPath($expectedShortcut),
+                [StringComparison]::OrdinalIgnoreCase
+              )) {
+            throw 'Standalone s-gw login service is not fully active and managed.'
+          }
           & $sgwPath agent install codex --dry-run
           if ($LASTEXITCODE -ne 0) { throw 'Standalone s-gw Codex dry-run failed.' }
           & $sgwPath agent install codex
