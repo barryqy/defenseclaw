@@ -446,6 +446,138 @@ jobs:
             }
           }
 
+          function Get-NativeWindowsPaths {
+            $processSystem = [IO.Path]::GetFullPath([Environment]::SystemDirectory).TrimEnd('\')
+            $parent = [IO.Directory]::GetParent($processSystem)
+            if ($null -eq $parent) {
+              throw 'The native Windows system directory could not be resolved.'
+            }
+            $windowsRoot = $parent.FullName.TrimEnd('\')
+            $system32 = Join-Path $windowsRoot 'System32'
+            $launchSystem = if ([Environment]::Is64BitOperatingSystem -and
+                -not [Environment]::Is64BitProcess) {
+              Join-Path $windowsRoot 'Sysnative'
+            } else {
+              $system32
+            }
+            $launchPowerShell = Join-Path $launchSystem 'WindowsPowerShell\v1.0\powershell.exe'
+            $reportedPowerShell = Join-Path $system32 'WindowsPowerShell\v1.0\powershell.exe'
+            if ([Uri]::new($windowsRoot).IsUnc -or
+                [IO.DriveInfo]::new([IO.Path]::GetPathRoot($windowsRoot)).DriveType -ne
+                  [IO.DriveType]::Fixed -or
+                -not [IO.File]::Exists($launchPowerShell)) {
+              throw 'The native Windows PowerShell runtime is unavailable.'
+            }
+            $powerShellInfo = [IO.FileInfo]::new($launchPowerShell)
+            $powerShellInfo.Refresh()
+            if (($powerShellInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+              throw 'The native Windows PowerShell runtime uses a reparse point.'
+            }
+            return [pscustomobject]@{
+              WindowsRoot = $windowsRoot
+              System32 = $system32
+              LaunchPowerShell = $launchPowerShell
+              ReportedPowerShell = $reportedPowerShell
+            }
+          }
+
+          function Invoke-WindowsWarmProbe {
+            param(
+              [Parameter(Mandatory = $true)]$WindowsPaths,
+              [Parameter(Mandatory = $true)][string]$Name,
+              [Parameter(Mandatory = $true)][string]$Script
+            )
+
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Script))
+            $startInfo = [Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $WindowsPaths.LaunchPowerShell
+            $startInfo.Arguments = (
+              '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' +
+              $encoded
+            )
+            $startInfo.WorkingDirectory = Split-Path -Parent $WindowsPaths.LaunchPowerShell
+            $startInfo.UseShellExecute = $false
+            $startInfo.CreateNoWindow = $true
+            $startInfo.EnvironmentVariables.Clear()
+            $startInfo.EnvironmentVariables['SystemRoot'] = $WindowsPaths.WindowsRoot
+            $startInfo.EnvironmentVariables['WINDIR'] = $WindowsPaths.WindowsRoot
+            $startInfo.EnvironmentVariables['PATH'] = (
+              $WindowsPaths.System32 + ';' + $WindowsPaths.WindowsRoot
+            )
+            foreach ($key in @(
+                'APPDATA',
+                'LOCALAPPDATA',
+                'TEMP',
+                'TMP',
+                'USERDOMAIN',
+                'USERNAME',
+                'USERPROFILE'
+            )) {
+              $value = [Environment]::GetEnvironmentVariable($key)
+              if ([string]::IsNullOrWhiteSpace($value)) { continue }
+              if ($value.Length -gt 8192 -or $value -match '[\0\r\n]') {
+                throw "The Windows environment contains an invalid $key value."
+              }
+              $startInfo.EnvironmentVariables[$key] = $value.Trim()
+            }
+
+            $process = [Diagnostics.Process]::new()
+            $process.StartInfo = $startInfo
+            $exitCode = $null
+            try {
+              if (-not $process.Start()) {
+                throw "The $Name warmup process did not start."
+              }
+              if (-not $process.WaitForExit(120000)) {
+                try {
+                  $process.Kill()
+                  if (-not $process.WaitForExit(5000)) {
+                    throw "The timed-out $Name warmup process did not exit after termination."
+                  }
+                } catch {
+                  throw "The timed-out $Name warmup process could not be stopped."
+                }
+                throw "The read-only $Name warmup exceeded 120 seconds."
+              }
+              $exitCode = $process.ExitCode
+            } finally {
+              $process.Dispose()
+            }
+            if ($exitCode -ne 0) {
+              throw "The read-only $Name warmup failed with exit code $exitCode."
+            }
+          }
+
+          function Warm-WindowsInspectionHelpers {
+            $windowsPaths = Get-NativeWindowsPaths
+            $helperProbe = @(
+              '$ErrorActionPreference = ''Stop'''
+              '$system32 = [Environment]::SystemDirectory'
+              '$cimModule = Join-Path $system32 ''WindowsPowerShell\v1.0\Modules\CimCmdlets\CimCmdlets.psd1'''
+              'Import-Module -Name $cimModule -ErrorAction Stop'
+              '$null = @(Get-CimInstance Win32_Process -Filter "Name = ''powershell.exe''")'
+              '$self = Get-CimInstance Win32_Process -Filter "ProcessId = $PID" -ErrorAction Stop'
+              'if ($null -eq $self) { throw ''The warmup process could not inspect itself.'' }'
+              '$currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value'
+              '$owner = Invoke-CimMethod -InputObject $self -MethodName GetOwnerSid -ErrorAction Stop'
+              'if ($null -eq $owner -or $owner.ReturnValue -ne 0 -or'
+              '    -not [string]::Equals([string]$owner.Sid, $currentSid, [StringComparison]::OrdinalIgnoreCase)) {'
+              '  throw ''The warmup process owner could not be verified.'''
+              '}'
+            ) -join "`n"
+            $listenerProbe = @(
+              '$ErrorActionPreference = ''Stop'''
+              '$system32 = [Environment]::SystemDirectory'
+              '$netModule = Join-Path $system32 ''WindowsPowerShell\v1.0\Modules\NetTCPIP\NetTCPIP.psd1'''
+              'Import-Module -Name $netModule -ErrorAction Stop'
+              '$null = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object { [int]$_.LocalPort -eq 8718 })'
+            ) -join "`n"
+            for ($pass = 1; $pass -le 2; $pass++) {
+              Invoke-WindowsWarmProbe -WindowsPaths $windowsPaths -Name 'CIM process inspection' -Script $helperProbe
+              Invoke-WindowsWarmProbe -WindowsPaths $windowsPaths -Name 'TCP listener inspection' -Script $listenerProbe
+            }
+          }
+
           function Get-SgwStartupResidues {
             param([Parameter(Mandatory = $true)][string]$StartupFolder)
 
@@ -501,9 +633,7 @@ jobs:
               throw 'Standalone s-gw Windows Credential Manager preflight did not complete.'
             }
 
-            $trustedPowerShell = Join-Path (
-              [Environment]::SystemDirectory
-            ) 'WindowsPowerShell\v1.0\powershell.exe'
+            $trustedPowerShell = (Get-NativeWindowsPaths).ReportedPowerShell
             $startupTimeout = (
               's-gw error: Could not manage the Windows login startup: ' +
               "spawnSync $trustedPowerShell ETIMEDOUT"
@@ -811,6 +941,7 @@ jobs:
             throw 'The installed standalone s-gw package identity is wrong.'
           }
 
+          Warm-WindowsInspectionHelpers
           Wait-SgwReadOnlyHelpers -SgwPath $sgwPath -StartupFolder $startupFolder
           & $sgwPath setup --no-open-app --no-agents
           if ($LASTEXITCODE -ne 0) { throw 'Standalone s-gw setup failed.' }
