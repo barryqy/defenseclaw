@@ -1,0 +1,583 @@
+# Fork-only preview packaging for the unmerged PR #664 commit. This is kept
+# separate from release.yaml so Cisco's production signing policy stays intact.
+
+name: PR 664 Windows fork preview
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr664-windows-fork-preview
+  cancel-in-progress: false
+
+env:
+  PREVIEW_REPOSITORY: barryqy/defenseclaw
+  PREVIEW_COMMIT: 51bd6d4acf72fd1add3b6eedbf2822dd0ed35914
+  PREVIEW_TAG: pr664-0.8.6-51bd6d4-source-only.1
+  PREVIEW_VERSION: 0.8.6
+  SGW_VERSION: 0.1.21
+  BUNDLE_NAME: PR664-UNSIGNED-SOURCE-ONLY-NO-SGW-RUNTIME-51bd6d4-windows-x64.zip
+
+jobs:
+  validate:
+    name: Validate fork preview request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Enforce fork, branch, and immutable preview identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "$PREVIEW_REPOSITORY" ]]
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          [[ "$PREVIEW_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PREVIEW_TAG" == "pr664-0.8.6-51bd6d4-source-only.1" ]]
+
+  build-windows:
+    name: Build unsigned Windows preview
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      DEFENSECLAW_REQUIRE_SGW_MODULES: "false"
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: barryqy/defenseclaw
+          ref: ${{ env.PREVIEW_COMMIT }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify source identity and fail-closed s-gw state
+        run: |
+          $head = (git rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($head -cne $env:PREVIEW_COMMIT) {
+            throw "Checked out $head instead of $env:PREVIEW_COMMIT"
+          }
+
+          $project = Get-Content pyproject.toml -Raw -Encoding UTF8
+          if ($project -notmatch '(?m)^version\s*=\s*"([^\"]+)"' -or
+              $Matches[1] -cne $env:PREVIEW_VERSION) {
+            throw "Preview commit does not report DefenseClaw $env:PREVIEW_VERSION"
+          }
+
+          $module = Get-Content release/s-gw-module.json -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ([string]$module.upstream_package_version -cne $env:SGW_VERSION) {
+            throw "Preview commit does not pin standalone s-gw $env:SGW_VERSION"
+          }
+
+          $runners = Get-Content release/s-gw-runners.json -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ([string]$runners.redistribution_status -cne 'not_approved') {
+            throw 'Fork preview must not claim an approved integrated s-gw runtime'
+          }
+          if ($null -ne $runners.signature_policy.public_key -or
+              $null -ne $runners.signature_policy.public_key_sha256) {
+            throw 'Fork preview must not contain an integrated s-gw trust key'
+          }
+
+          $windows = $runners.targets.'win32-x64'
+          foreach ($name in @('runner', 'credential_helper', 'approval_ui', 'license_bundle')) {
+            $component = $windows.components.$name
+            foreach ($field in @('path', 'sha256', 'installed_sha256', 'signature')) {
+              if ($null -ne $component.$field) {
+                throw "Fork preview unexpectedly contains $name.$field"
+              }
+            }
+          }
+          foreach ($field in @('runner_launch_admission', 'module_installed_sha256', 'module_signature')) {
+            if ($null -ne $windows.$field) {
+              throw "Fork preview unexpectedly contains win32-x64.$field"
+            }
+          }
+
+      - name: Initialize isolated build paths
+        run: >-
+          ./scripts/initialize-windows-native-ci-paths.ps1
+          -Leaf preview-build
+          -DiagnosticsLeaf preview-build-diagnostics
+          -ArtifactLeaf preview-dist
+
+      - name: Bind an intentionally absent integrated-runtime directory
+        run: |
+          $emptyModules = Join-Path $env:RUNNER_TEMP 'pr664-no-integrated-sgw-runtime'
+          if (Test-Path -LiteralPath $emptyModules) {
+            throw "Expected integrated-runtime directory to stay absent: $emptyModules"
+          }
+          "DEFENSECLAW_SGW_ARTIFACT_DIR=$emptyModules" >> $env:GITHUB_ENV
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Build release-shaped Windows artifacts
+        run: >-
+          ./scripts/windows-native-ci.ps1
+          -Operation build-artifacts
+          -StateRoot $env:DC_STATE_ROOT
+          -ArtifactRoot $env:DC_ARTIFACT_ROOT
+
+      - name: Prove the wheel contains no production s-gw modules
+        run: |
+          $wheels = @(Get-ChildItem -LiteralPath $env:DC_ARTIFACT_ROOT -Filter 'defenseclaw-*.whl' -File)
+          if ($wheels.Count -ne 1) {
+            throw "Expected one DefenseClaw wheel, found $($wheels.Count)"
+          }
+          $env:PREVIEW_WHEEL = $wheels[0].FullName
+          $env:SOURCE_ONLY_RESULT = Join-Path $env:DC_ARTIFACT_ROOT 'SOURCE-ONLY-VALIDATION.json'
+          $validation = @'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          from scripts.stage_sgw_modules import validate_source_only_wheel
+
+          wheel = Path(os.environ["PREVIEW_WHEEL"])
+          result = validate_source_only_wheel(wheel, version=os.environ["PREVIEW_VERSION"])
+          if result.get("production_modules") is not False:
+              raise SystemExit("wheel unexpectedly contains production s-gw modules")
+          result["wheel"] = wheel.name
+          result["wheel_sha256"] = hashlib.sha256(wheel.read_bytes()).hexdigest()
+          Path(os.environ["SOURCE_ONLY_RESULT"]).write_text(
+              json.dumps(result, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          '@
+          & uv run --frozen python -c $validation
+          if ($LASTEXITCODE -ne 0) { throw 'Source-only wheel validation failed' }
+
+      - name: Build unsigned Windows Setup
+        run: >-
+          ./scripts/windows-native-ci.ps1
+          -Operation build-installer
+          -StateRoot $env:DC_STATE_ROOT
+          -ArtifactRoot $env:DC_ARTIFACT_ROOT
+
+      - name: Verify native Setup wizard responsiveness
+        run: >-
+          ./scripts/invoke-windows-setup-standard-user-ci.ps1
+          -Mode wizard-smoke
+          -ArtifactRoot $env:DC_ARTIFACT_ROOT
+          -StateRoot (Join-Path $env:DC_STATE_ROOT 'wizard-standard-user')
+          -DiagnosticsRoot $env:DC_DIAGNOSTICS
+          -TimeoutSeconds 600
+
+      - name: Write preview identity and installation notes
+        run: |
+          $setup = Join-Path $env:DC_ARTIFACT_ROOT 'DefenseClawSetup-x64.exe'
+          $setupHashPath = "$setup.sha256"
+          $provenancePath = "$setup.provenance.json"
+          $sbomPath = "$setup.sbom.json"
+          foreach ($required in @($setup, $setupHashPath, $provenancePath, $sbomPath)) {
+            if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+              throw "Windows Setup output is missing: $required"
+            }
+          }
+
+          $signature = Get-AuthenticodeSignature -LiteralPath $setup
+          if ([string]$signature.Status -cne 'NotSigned') {
+            throw "Fork preview Setup must be unsigned, got $($signature.Status)"
+          }
+          $setupSha256 = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+          $recordedHash = (Get-Content -LiteralPath $setupHashPath -Raw -Encoding ASCII).Trim()
+          if ($recordedHash -cnotmatch '^([0-9a-f]{64})  DefenseClawSetup-x64\.exe$' -or
+              $Matches[1] -cne $setupSha256) {
+            throw 'Windows Setup SHA-256 sidecar does not match the built executable'
+          }
+
+          $provenance = Get-Content -LiteralPath $provenancePath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ([string]$provenance.source_commit -cne $env:PREVIEW_COMMIT -or
+              [string]$provenance.version -cne $env:PREVIEW_VERSION -or
+              [string]$provenance.distribution_flavor -cne 'oss' -or
+              $provenance.unsigned -ne $true -or
+              $provenance.inputs.product_executables_authenticode_signed -ne $false -or
+              [string]$provenance.artifact_sha256 -cne $setupSha256) {
+            throw 'Windows Setup provenance does not match the pinned unsigned source-only build'
+          }
+
+          $sbom = Get-Content -LiteralPath $sbomPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ([string]$sbom.spdxVersion -cne 'SPDX-2.3' -or
+              [string]$sbom.dataLicense -cne 'CC0-1.0' -or
+              @($sbom.documentDescribes).Count -ne 1) {
+            throw 'Windows Setup SBOM is invalid'
+          }
+
+          $sourceOnlyPath = Join-Path $env:DC_ARTIFACT_ROOT 'SOURCE-ONLY-VALIDATION.json'
+          $sourceOnly = Get-Content -LiteralPath $sourceOnlyPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($sourceOnly.production_modules -ne $false -or
+              [string]$sourceOnly.version -cne $env:PREVIEW_VERSION) {
+            throw 'Source-only wheel receipt is invalid'
+          }
+
+          $manifest = [ordered]@{
+            schema_version = 1
+            release_tag = $env:PREVIEW_TAG
+            source_commit = $env:PREVIEW_COMMIT
+            defenseclaw_version = $env:PREVIEW_VERSION
+            authenticode = 'unsigned'
+            integrated_sgw = $false
+            credential_protection = 'disabled'
+            standalone_sgw_npm = "@s-gw/s-gw@$($env:SGW_VERSION)"
+            setup_sha256 = $setupSha256
+            setup_provenance_sha256 = (Get-FileHash -LiteralPath $provenancePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            setup_sbom_sha256 = (Get-FileHash -LiteralPath $sbomPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            source_only_wheel_sha256 = [string]$sourceOnly.wheel_sha256
+            bundle = $env:BUNDLE_NAME
+            wizard_default_is_unsupported = $true
+          }
+          $manifestPath = Join-Path $env:DC_ARTIFACT_ROOT 'PREVIEW-MANIFEST.json'
+          [IO.File]::WriteAllText(
+            $manifestPath,
+            (($manifest | ConvertTo-Json -Depth 4) + "`n"),
+            [Text.UTF8Encoding]::new($false)
+          )
+
+          $notes = @"
+          # PR #664 Windows preview
+
+          This is an unsigned fork-owned test build from commit ``$env:PREVIEW_COMMIT``.
+          It does not include DefenseClaw-managed s-gw credential protection. The public
+          ``@s-gw/s-gw@$env:SGW_VERSION`` package is installed separately and remains a
+          standalone integration.
+
+          Requirements: native Windows x64, PowerShell, Node.js 20 or newer, and a normal
+          non-administrator Windows user. Use a disposable machine or VM. Windows may warn
+          because this test package is intentionally unsigned.
+
+          Download and extract ``$env:BUNDLE_NAME``. Do not double-click the Setup file:
+          this source-only build still shows an unsupported credential-protection option
+          selected by default. Use the exact quiet command below so that option stays off.
+
+          ## Install DefenseClaw with credential protection off
+
+          From the extracted bundle directory:
+
+          ``````powershell
+          `$setupPath = Join-Path `$PWD 'payload\DefenseClawSetup-x64.exe'
+          `$recorded = (Get-Content "`$setupPath.sha256" -Raw).Trim().Split()[0]
+          `$actual = (Get-FileHash `$setupPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if (`$actual -cne `$recorded) { throw 'Setup checksum mismatch' }
+          `$setup = Start-Process `$setupPath -Wait -PassThru -ArgumentList @(
+            '/quiet', '/norestart', 'INSTALLSCOPE=user', 'CONNECTOR=none',
+            'MODE=observe', 'STARTGATEWAY=0', 'CREDENTIALPROTECTION=0'
+          )
+          if (`$setup.ExitCode -notin 0, 3010) { throw "Setup failed: `$(`$setup.ExitCode)" }
+          ``````
+
+          Open a fresh PowerShell, then configure DefenseClaw for Codex:
+
+          ``````powershell
+          defenseclaw init --non-interactive --yes --connector codex --profile observe --scanner-mode local --no-credential-protection --start-gateway --verify
+          ``````
+
+          ## Install standalone s-gw
+
+          ``````powershell
+          npm install --global @s-gw/s-gw@$env:SGW_VERSION
+          s-gw setup
+          s-gw status
+          s-gw agent status codex
+          ``````
+
+          If Codex is not connected, review and apply the standalone s-gw change:
+
+          ``````powershell
+          s-gw agent install codex --dry-run
+          s-gw agent install codex
+          ``````
+
+          Verify the two products separately:
+
+          ``````powershell
+          defenseclaw doctor --passive
+          defenseclaw credential-protection status --json
+          s-gw status
+          s-gw agent status codex
+          ``````
+
+          DefenseClaw credential protection must report ``enabled: false``. Standalone
+          s-gw does not satisfy or enable the DefenseClaw-managed integration.
+          "@
+          $notesPath = Join-Path $env:DC_ARTIFACT_ROOT 'INSTALL-WINDOWS.md'
+          [IO.File]::WriteAllText($notesPath, $notes.Trim() + "`n", [Text.UTF8Encoding]::new($false))
+
+          $bundleRoot = Join-Path $env:DC_STATE_ROOT 'preview-bundle'
+          $payloadRoot = Join-Path $bundleRoot 'payload'
+          if (Test-Path -LiteralPath $bundleRoot) {
+            throw "Preview bundle root already exists: $bundleRoot"
+          }
+          [IO.Directory]::CreateDirectory($payloadRoot) | Out-Null
+          foreach ($path in @($setup, $setupHashPath, $provenancePath, $sbomPath)) {
+            Copy-Item -LiteralPath $path -Destination $payloadRoot
+          }
+          foreach ($path in @($notesPath, $manifestPath, $sourceOnlyPath)) {
+            Copy-Item -LiteralPath $path -Destination $bundleRoot
+          }
+
+          $bundlePath = Join-Path $env:DC_ARTIFACT_ROOT $env:BUNDLE_NAME
+          Compress-Archive -Path (Join-Path $bundleRoot '*') -DestinationPath $bundlePath -CompressionLevel Optimal
+          if (-not (Test-Path -LiteralPath $bundlePath -PathType Leaf)) {
+            throw 'Preview bundle was not produced'
+          }
+
+          $checksums = foreach ($name in @(
+              $env:BUNDLE_NAME,
+              'INSTALL-WINDOWS.md',
+              'PREVIEW-MANIFEST.json',
+              'SOURCE-ONLY-VALIDATION.json'
+          )) {
+            $path = Join-Path $env:DC_ARTIFACT_ROOT $name
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $name"
+          }
+          [IO.File]::WriteAllLines(
+            (Join-Path $env:DC_ARTIFACT_ROOT 'SHA256SUMS.txt'),
+            $checksums,
+            [Text.UTF8Encoding]::new($false)
+          )
+
+      - name: Upload preview build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr664-windows-preview-build
+          path: ${{ env.DC_ARTIFACT_ROOT }}\*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Capture bounded diagnostics
+        if: ${{ failure() || cancelled() }}
+        run: >-
+          ./scripts/windows-native-ci.ps1
+          -Operation capture
+          -StateRoot $env:DC_STATE_ROOT
+          -DiagnosticsRoot $env:DC_DIAGNOSTICS
+
+      - name: Upload build diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr664-windows-preview-build-diagnostics
+          path: ${{ env.DC_DIAGNOSTICS }}\**
+          if-no-files-found: ignore
+          retention-days: 5
+
+      - name: Clean isolated build state
+        if: ${{ always() }}
+        run: ./scripts/windows-native-ci.ps1 -Operation cleanup -StateRoot $env:DC_STATE_ROOT
+
+  accept-windows:
+    name: Verify standard-user install with credential protection off
+    needs: build-windows
+    runs-on: windows-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: barryqy/defenseclaw
+          ref: ${{ env.PREVIEW_COMMIT }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Initialize isolated acceptance paths
+        run: >-
+          ./scripts/initialize-windows-native-ci-paths.ps1
+          -Leaf preview-acceptance
+          -DiagnosticsLeaf preview-acceptance-diagnostics
+          -ArtifactLeaf preview-dist
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pr664-windows-preview-build
+          path: ${{ env.DC_ARTIFACT_ROOT }}
+
+      - name: Verify checksums
+        run: |
+          foreach ($line in Get-Content (Join-Path $env:DC_ARTIFACT_ROOT 'SHA256SUMS.txt')) {
+            if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { throw "Invalid checksum line: $line" }
+            $actual = (Get-FileHash -LiteralPath (Join-Path $env:DC_ARTIFACT_ROOT $Matches[2]) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -cne $Matches[1]) { throw "Checksum mismatch: $($Matches[2])" }
+          }
+
+      - name: Run Setup install, repair, and uninstall acceptance
+        run: >-
+          ./scripts/invoke-windows-setup-standard-user-ci.ps1
+          -Mode setup-acceptance
+          -StateRoot $env:DC_STATE_ROOT
+          -ArtifactRoot $env:DC_ARTIFACT_ROOT
+          -DiagnosticsRoot $env:DC_DIAGNOSTICS
+          -NoCredentialProtection
+          -TimeoutSeconds 4200
+
+      - name: Capture bounded diagnostics
+        if: ${{ failure() || cancelled() }}
+        run: >-
+          ./scripts/windows-native-ci.ps1
+          -Operation capture
+          -StateRoot $env:DC_STATE_ROOT
+          -DiagnosticsRoot $env:DC_DIAGNOSTICS
+
+      - name: Upload acceptance diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr664-windows-preview-acceptance-diagnostics
+          path: ${{ env.DC_DIAGNOSTICS }}\**
+          if-no-files-found: ignore
+          retention-days: 5
+
+      - name: Clean isolated acceptance state
+        if: ${{ always() }}
+        run: ./scripts/windows-native-ci.ps1 -Operation cleanup -StateRoot $env:DC_STATE_ROOT
+
+  publish:
+    name: Publish fork prerelease
+    needs: accept-windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pr664-windows-preview-build
+          path: dist
+
+      - name: Verify release assets
+        shell: bash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum --check SHA256SUMS.txt
+          [[ "$(jq -r .source_commit PREVIEW-MANIFEST.json)" == "$PREVIEW_COMMIT" ]]
+          [[ "$(jq -r .integrated_sgw PREVIEW-MANIFEST.json)" == "false" ]]
+          [[ "$(jq -r .credential_protection PREVIEW-MANIFEST.json)" == "disabled" ]]
+          [[ "$(jq -r .production_modules SOURCE-ONLY-VALIDATION.json)" == "false" ]]
+          zipinfo -1 "$BUNDLE_NAME" | sed 's#\\#/#g' | grep -v '/$' | sort > actual-bundle-files.txt
+          printf '%s\n' \
+            INSTALL-WINDOWS.md \
+            PREVIEW-MANIFEST.json \
+            SOURCE-ONLY-VALIDATION.json \
+            payload/DefenseClawSetup-x64.exe \
+            payload/DefenseClawSetup-x64.exe.provenance.json \
+            payload/DefenseClawSetup-x64.exe.sbom.json \
+            payload/DefenseClawSetup-x64.exe.sha256 | sort > expected-bundle-files.txt
+          diff -u expected-bundle-files.txt actual-bundle-files.txt
+
+      - name: Create, fill, and publish a fork prerelease draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/$PREVIEW_REPOSITORY/releases?per_page=100" |
+              jq -e --arg tag "$PREVIEW_TAG" '.[] | select(.tag_name == $tag)' >/dev/null; then
+            echo "Release $PREVIEW_TAG already exists; refusing to replace it" >&2
+            exit 1
+          fi
+          if gh api "repos/$PREVIEW_REPOSITORY/git/ref/tags/$PREVIEW_TAG" >/dev/null 2>&1; then
+            echo "Tag $PREVIEW_TAG already exists; refusing to retarget it" >&2
+            exit 1
+          fi
+
+          draft_payload="$(jq -n \
+            --arg tag "$PREVIEW_TAG" \
+            --arg target "$PREVIEW_COMMIT" \
+            --rawfile body dist/INSTALL-WINDOWS.md \
+            '{
+              tag_name: $tag,
+              target_commitish: $target,
+              name: "PR #664 Windows source-only test build — unsigned, no s-gw runtime",
+              body: $body,
+              draft: true,
+              prerelease: true,
+              make_latest: "false"
+            }')"
+          draft="$(gh api --method POST "repos/$PREVIEW_REPOSITORY/releases" \
+            --input - <<<"$draft_payload")"
+          release_id="$(jq -r .id <<<"$draft")"
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+
+          cleanup_draft() {
+            if [[ -n "${release_id:-}" ]]; then
+              gh api --method DELETE "repos/$PREVIEW_REPOSITORY/releases/$release_id" || true
+            fi
+          }
+          trap cleanup_draft ERR
+
+          for file in \
+            "dist/$BUNDLE_NAME" \
+            dist/INSTALL-WINDOWS.md \
+            dist/PREVIEW-MANIFEST.json \
+            dist/SOURCE-ONLY-VALIDATION.json \
+            dist/SHA256SUMS.txt; do
+            name="$(basename "$file")"
+            curl --silent --show-error --fail-with-body \
+              --request POST \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              --header 'Content-Type: application/octet-stream' \
+              --data-binary "@$file" \
+              "https://uploads.github.com/repos/$PREVIEW_REPOSITORY/releases/$release_id/assets?name=$name" \
+              >/dev/null
+          done
+
+          final_payload='{"draft":false,"prerelease":true,"make_latest":"false"}'
+          gh api --method PATCH "repos/$PREVIEW_REPOSITORY/releases/$release_id" \
+            --input - <<<"$final_payload" >/dev/null
+          release_id=''
+          trap - ERR
+
+      - name: Verify published prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release="$(gh release view "$PREVIEW_TAG" --repo "$PREVIEW_REPOSITORY" \
+            --json isDraft,isPrerelease,tagName,targetCommitish,url)"
+          [[ "$(jq -r .isDraft <<<"$release")" == "false" ]]
+          [[ "$(jq -r .isPrerelease <<<"$release")" == "true" ]]
+          [[ "$(jq -r .tagName <<<"$release")" == "$PREVIEW_TAG" ]]
+          [[ "$(jq -r .targetCommitish <<<"$release")" == "$PREVIEW_COMMIT" ]]
+          tag="$(gh api "repos/$PREVIEW_REPOSITORY/git/ref/tags/$PREVIEW_TAG")"
+          [[ "$(jq -r .object.type <<<"$tag")" == "commit" ]]
+          [[ "$(jq -r .object.sha <<<"$tag")" == "$PREVIEW_COMMIT" ]]
+          gh release view "$PREVIEW_TAG" --repo "$PREVIEW_REPOSITORY" \
+            --json assets --jq '.assets[].name' | sort > actual-assets.txt
+          printf '%s\n' \
+            "$BUNDLE_NAME" \
+            INSTALL-WINDOWS.md \
+            PREVIEW-MANIFEST.json \
+            SOURCE-ONLY-VALIDATION.json \
+            SHA256SUMS.txt | sort > expected-assets.txt
+          diff -u expected-assets.txt actual-assets.txt
+          remote_dir="$(mktemp -d "$RUNNER_TEMP/pr664-release.XXXXXX")"
+          gh release download "$PREVIEW_TAG" --repo "$PREVIEW_REPOSITORY" --dir "$remote_dir"
+          for name in \
+            "$BUNDLE_NAME" \
+            INSTALL-WINDOWS.md \
+            PREVIEW-MANIFEST.json \
+            SOURCE-ONLY-VALIDATION.json \
+            SHA256SUMS.txt; do
+            cmp -s "dist/$name" "$remote_dir/$name"
+          done
+          (cd "$remote_dir" && sha256sum --check SHA256SUMS.txt)
+          jq -r .url <<<"$release"
