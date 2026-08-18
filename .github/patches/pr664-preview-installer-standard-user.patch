@@ -1,5 +1,5 @@
 diff --git a/scripts/invoke-windows-setup-standard-user-ci.ps1 b/scripts/invoke-windows-setup-standard-user-ci.ps1
-index 4390b93d..a5705db8 100644
+index 4390b93d..39a04618 100644
 --- a/scripts/invoke-windows-setup-standard-user-ci.ps1
 +++ b/scripts/invoke-windows-setup-standard-user-ci.ps1
 @@ -20 +20,7 @@ param(
@@ -127,7 +127,7 @@ index 4390b93d..a5705db8 100644
 +    }
 +}
 +
-@@ -408,0 +522,38 @@ function Invoke-ChildMode {
+@@ -408,0 +522,44 @@ function Invoke-ChildMode {
 +        } elseif ($Mode -eq 'preview-wrapper') {
 +            $localAppData = [Environment]::GetFolderPath(
 +                [Environment+SpecialFolder]::LocalApplicationData
@@ -135,11 +135,17 @@ index 4390b93d..a5705db8 100644
 +            if ([string]::IsNullOrWhiteSpace($localAppData)) {
 +                throw 'disposable user has no LocalApplicationData known folder'
 +            }
++            $previewRoot = Join-Path $localAppData (
++                'DefenseClawCI\preview-' + [guid]::NewGuid().ToString('N')
++            )
++            Protect-PreviewDirectory $previewRoot
++            [Environment]::CurrentDirectory = $previewRoot
++            Set-Location -LiteralPath $previewRoot
 +
 +            $nodeArchive = Join-Path $artifacts $PreviewNodeArchiveName
 +            $bundleArchive = Join-Path $artifacts $PreviewBundleName
-+            $nodeRoot = Join-Path $localAppData 'DefenseClawCI\preview-node'
-+            $bundleRoot = Join-Path $state 'preview-bundle'
++            $nodeRoot = Join-Path $previewRoot 'node'
++            $bundleRoot = Join-Path $previewRoot 'bundle'
 +            Expand-Archive -LiteralPath $nodeArchive -DestinationPath $nodeRoot
 +            Expand-Archive -LiteralPath $bundleArchive -DestinationPath $bundleRoot
 +
@@ -166,7 +172,7 @@ index 4390b93d..a5705db8 100644
 +            if ($LASTEXITCODE -ne 0) {
 +                throw "preview wrapper exited with code $LASTEXITCODE"
 +            }
-@@ -434,13 +585,15 @@ function Invoke-ChildMode {
+@@ -434,13 +591,15 @@ function Invoke-ChildMode {
 -            try {
 -                & $nativeHarness -Operation capture -StateRoot $state `
 -                    -DiagnosticsRoot ([IO.Path]::GetFullPath($DiagnosticsRoot))
@@ -195,7 +201,7 @@ index 4390b93d..a5705db8 100644
 +                        $state
 +                    )
 +                }
-@@ -852,0 +1006,17 @@ $bootstrapCosignSha256 = 'DD6C61E510DA627BCAED4CD9DB844EC11CACD09826D814D89F7F68
+@@ -852,0 +1012,17 @@ $bootstrapCosignSha256 = 'DD6C61E510DA627BCAED4CD9DB844EC11CACD09826D814D89F7F68
 +$previewSourceHashes = @{}
 +if ($Mode -eq 'preview-wrapper') {
 +    foreach ($archiveName in @($PreviewBundleName, $PreviewNodeArchiveName)) {
@@ -213,7 +219,7 @@ index 4390b93d..a5705db8 100644
 +        ).Hash
 +    }
 +}
-@@ -1057,0 +1228,14 @@ try {
+@@ -1057,0 +1234,14 @@ try {
 +    if ($Mode -eq 'preview-wrapper') {
 +        foreach ($archiveName in @($PreviewBundleName, $PreviewNodeArchiveName)) {
 +            $childArchive = Join-Path $childArtifacts $archiveName
@@ -228,14 +234,14 @@ index 4390b93d..a5705db8 100644
 +            }
 +        }
 +    }
-@@ -1170,0 +1355,6 @@ try {
+@@ -1170,0 +1361,6 @@ try {
 +    if ($Mode -eq 'preview-wrapper') {
 +        $arguments += @(
 +            '-PreviewBundleName', $PreviewBundleName,
 +            '-PreviewNodeArchiveName', $PreviewNodeArchiveName
 +        )
 +    }
-@@ -1261,0 +1452,13 @@ try {
+@@ -1261,0 +1458,13 @@ try {
 +    if ($Mode -eq 'preview-wrapper') {
 +        foreach ($archiveName in @($PreviewBundleName, $PreviewNodeArchiveName)) {
 +            $expectedHash = [string]$previewSourceHashes[$archiveName]
