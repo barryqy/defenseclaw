@@ -1,0 +1,176 @@
+name: PR 664 wrapper diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: pr664-wrapper-diagnostic
+  cancel-in-progress: true
+
+env:
+  PREVIEW_COMMIT: 51bd6d4acf72fd1add3b6eedbf2822dd0ed35914
+  SOURCE_RUN_ID: '32118455094'
+  BUNDLE_NAME: PR664-UNSIGNED-SOURCE-ONLY-NO-SGW-RUNTIME-51bd6d4-windows-x64.zip
+  PREVIEW_NODE_ARCHIVE: node-v20.19.5-win-x64-ci.zip
+  PREVIEW_HARNESS_PATCH_SHA256: 7df208fc6923590f4233a1d6e12e3ebc743b8312ce0cb148b0add3b35cfa1b02
+
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: barryqy/defenseclaw
+          ref: ${{ env.PREVIEW_COMMIT }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check out the workflow-bound harness patch
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: barryqy/defenseclaw
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: .preview-workflow-source
+          sparse-checkout: .github/patches/pr664-preview-installer-standard-user.patch
+          sparse-checkout-cone-mode: false
+
+      - name: Apply the CI-only standard-user preview harness
+        run: |
+          $head = (& git.exe rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne $env:PREVIEW_COMMIT) {
+            throw "Diagnostic checkout is not the exact PR commit: $head"
+          }
+          $patchSource = Join-Path $env:GITHUB_WORKSPACE `
+            '.preview-workflow-source\.github\patches\pr664-preview-installer-standard-user.patch'
+          $patchText = [IO.File]::ReadAllText(
+            $patchSource,
+            [Text.UTF8Encoding]::new($false, $true)
+          ).Replace("`r`n", "`n")
+          if ($patchText.Contains("`r")) {
+            throw 'CI-only preview harness patch contains an invalid carriage return'
+          }
+          $patch = Join-Path $env:RUNNER_TEMP 'pr664-preview-installer-standard-user.patch'
+          [IO.File]::WriteAllText($patch, $patchText, [Text.UTF8Encoding]::new($false))
+          $patchHash = (Get-FileHash -LiteralPath $patch -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($patchHash -cne $env:PREVIEW_HARNESS_PATCH_SHA256) {
+            throw "CI-only preview harness patch changed: $patchHash"
+          }
+          & git.exe apply --check --index --unidiff-zero --whitespace=error-all -- $patch
+          if ($LASTEXITCODE -ne 0) { throw 'CI-only preview harness patch does not apply cleanly' }
+          & git.exe apply --index --unidiff-zero --whitespace=error-all -- $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Could not apply the CI-only preview harness patch' }
+          & git.exe diff --cached --check
+          if ($LASTEXITCODE -ne 0) { throw 'Patched diagnostic source failed git diff --check' }
+          & git.exe diff --quiet
+          if ($LASTEXITCODE -ne 0) { throw 'Patched diagnostic checkout has unstaged changes' }
+          $changed = @(& git.exe diff --cached --name-only --)
+          if ($LASTEXITCODE -ne 0 -or $changed.Count -ne 1 -or
+              [string]$changed[0] -cne 'scripts/invoke-windows-setup-standard-user-ci.ps1') {
+            throw "CI-only patch changed an unexpected source path: $($changed -join ', ')"
+          }
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 20.19.5
+
+      - name: Initialize isolated diagnostic paths
+        run: >-
+          ./scripts/initialize-windows-native-ci-paths.ps1
+          -Leaf diag-wrap
+          -DiagnosticsLeaf diag-wrap-output
+          -ArtifactLeaf diag-dist
+
+      - name: Download the previously accepted build output
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pr664-windows-preview-build
+          path: ${{ env.DC_ARTIFACT_ROOT }}
+          github-token: ${{ github.token }}
+          repository: barryqy/defenseclaw
+          run-id: ${{ env.SOURCE_RUN_ID }}
+
+      - name: Bind diagnostic input to the shipped bundle
+        run: |
+          foreach ($line in Get-Content (Join-Path $env:DC_ARTIFACT_ROOT 'SHA256SUMS.txt')) {
+            if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { throw "Invalid checksum line: $line" }
+            $path = Join-Path $env:DC_ARTIFACT_ROOT $Matches[2]
+            $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -cne $Matches[1]) { throw "Checksum mismatch: $($Matches[2])" }
+          }
+
+          $extractRoot = Join-Path $env:DC_STATE_ROOT 'bundle'
+          $acceptedRoot = Join-Path $env:DC_STATE_ROOT 'accepted'
+          [IO.Directory]::CreateDirectory($extractRoot) | Out-Null
+          [IO.Directory]::CreateDirectory($acceptedRoot) | Out-Null
+          $bundle = Join-Path $env:DC_ARTIFACT_ROOT $env:BUNDLE_NAME
+          Expand-Archive -LiteralPath $bundle -DestinationPath $extractRoot
+          & (Join-Path $extractRoot 'Install-Preview.ps1') -VerifyOnly
+
+          $payloadSetup = Join-Path $extractRoot 'payload\DefenseClawSetup-x64.preview-payload'
+          $rawSetup = Join-Path $env:DC_ARTIFACT_ROOT 'DefenseClawSetup-x64.exe'
+          if ((Get-FileHash -LiteralPath $payloadSetup -Algorithm SHA256).Hash -cne
+              (Get-FileHash -LiteralPath $rawSetup -Algorithm SHA256).Hash) {
+            throw 'Shipped Setup differs from the accepted build output'
+          }
+          Copy-Item -LiteralPath $payloadSetup `
+            -Destination (Join-Path $acceptedRoot 'DefenseClawSetup-x64.exe')
+          Copy-Item -LiteralPath $bundle -Destination $acceptedRoot
+          foreach ($name in @(
+              'DefenseClawWindowsResourceVerifier-x64.exe',
+              'DefenseClawWindowsResourceIcon.png',
+              'DefenseClawWindowsResourceVersion.txt'
+          )) {
+            Copy-Item -LiteralPath (Join-Path $env:DC_ARTIFACT_ROOT $name) `
+              -Destination $acceptedRoot
+          }
+
+          $node = Get-Command node.exe -CommandType Application -ErrorAction Stop |
+            Select-Object -First 1
+          $nodeRoot = Split-Path -Parent ([string]$node.Source)
+          if ((& $node.Source --version | Out-String).Trim() -cne 'v20.19.5') {
+            throw 'Diagnostic runner does not have exact Node v20.19.5'
+          }
+          $nodeArchive = Join-Path $acceptedRoot $env:PREVIEW_NODE_ARCHIVE
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [IO.Compression.ZipFile]::CreateFromDirectory(
+            $nodeRoot,
+            $nodeArchive,
+            [IO.Compression.CompressionLevel]::Optimal,
+            $false
+          )
+          "ACCEPTED_ARTIFACT_ROOT=$acceptedRoot" >> $env:GITHUB_ENV
+
+      - name: Run the exact shipped installer as a disposable standard user
+        run: >-
+          ./scripts/invoke-windows-setup-standard-user-ci.ps1
+          -Mode preview-wrapper
+          -StateRoot (Join-Path $env:DC_STATE_ROOT 'wrapper')
+          -ArtifactRoot $env:ACCEPTED_ARTIFACT_ROOT
+          -DiagnosticsRoot $env:DC_DIAGNOSTICS
+          -PreviewBundleName $env:BUNDLE_NAME
+          -PreviewNodeArchiveName $env:PREVIEW_NODE_ARCHIVE
+          -NoCredentialProtection
+          -TimeoutSeconds 3600
+
+      - name: Upload bounded wrapper diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr664-wrapper-diagnostic-${{ github.run_id }}
+          path: ${{ env.DC_DIAGNOSTICS }}\**
+          if-no-files-found: ignore
+          retention-days: 2
+
+      - name: Clean isolated diagnostic state
+        if: ${{ always() }}
+        run: ./scripts/windows-native-ci.ps1 -Operation cleanup -StateRoot $env:DC_STATE_ROOT
